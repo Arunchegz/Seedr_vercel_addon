@@ -1,1 +1,7 @@
-from app import app
+{
+  "functions": {
+    "api/*.py": {
+      "runtime": "python@3.11"
+    }
+  }
+}

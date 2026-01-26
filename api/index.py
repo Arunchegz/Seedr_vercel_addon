@@ -100,7 +100,7 @@ def extract_title_year(filename: str):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.1.0",
+        "version": "1.1.2",
         "name": "Seedr.cc Personal Addon",
         "description": "Stream and browse your Seedr.cc files in Stremio",
         "resources": ["stream", "catalog", "meta"],
@@ -111,8 +111,8 @@ def manifest():
                 "id": "seedr",
                 "name": "My Seedr Files"
             }
-        ],
-        "idPrefixes": ["tt"]
+        ]
+        # IMPORTANT: idPrefixes REMOVED so custom IDs work
     }
 
 # -----------------------
@@ -204,7 +204,6 @@ def stream(type: str, id: str):
 
                     if norm_title in fname_norm and movie_year in file.name:
                         result = client.fetch_file(file.folder_file_id)
-
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,
@@ -225,7 +224,6 @@ def stream(type: str, id: str):
 
                     if file_id == id:
                         result = client.fetch_file(file.folder_file_id)
-
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,

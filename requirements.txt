@@ -2,3 +2,4 @@ fastapi
 requests
 seedrcc
 python-dotenv
+upstash-redis

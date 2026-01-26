@@ -175,7 +175,10 @@ def meta(id: str):
     }
 
 # -----------------------
-# Stream endpoint (Used by Stremio movie pages)
+# Stream endpoint
+# Works for:
+# 1. IMDb pages (ttxxxxxx)
+# 2. "My Seedr Files" catalog entries
 # -----------------------
 
 @app.get("/stream/{type}/{id}.json")
@@ -186,34 +189,53 @@ def stream(type: str, id: str):
         return {"streams": []}
 
     try:
-        # 1. Get movie title + year from IMDb via Cinemeta
-        movie_title, movie_year = get_movie_title(id)
-        norm_title = normalize(movie_title)
-
         with get_client() as client:
-            # 2. Walk ALL files including inside folders
-            for file in walk_files(client):
-                if not file.play_video:
-                    continue
 
-                fname_norm = normalize(file.name)
+            # CASE 1 → IMDb movie page
+            if id.startswith("tt"):
+                movie_title, movie_year = get_movie_title(id)
+                norm_title = normalize(movie_title)
 
-                # 3. Match by title + year
-                if norm_title in fname_norm and movie_year in file.name:
-                    # 4. Fetch real streaming URL from Seedr
-                    result = client.fetch_file(file.folder_file_id)
+                for file in walk_files(client):
+                    if not file.play_video:
+                        continue
 
-                    streams.append({
-                        "name": "Seedr.cc",
-                        "title": file.name,
-                        "url": result.url,
-                        "behaviorHints": {
-                            "notWebReady": False
-                        }
-                    })
+                    fname_norm = normalize(file.name)
+
+                    if norm_title in fname_norm and movie_year in file.name:
+                        result = client.fetch_file(file.folder_file_id)
+
+                        streams.append({
+                            "name": "Seedr.cc",
+                            "title": file.name,
+                            "url": result.url,
+                            "behaviorHints": {
+                                "notWebReady": False
+                            }
+                        })
+
+            # CASE 2 → Playing from "My Seedr Files"
+            else:
+                for file in walk_files(client):
+                    if not file.play_video:
+                        continue
+
+                    title, year = extract_title_year(file.name)
+                    file_id = normalize(title + year)
+
+                    if file_id == id:
+                        result = client.fetch_file(file.folder_file_id)
+
+                        streams.append({
+                            "name": "Seedr.cc",
+                            "title": file.name,
+                            "url": result.url,
+                            "behaviorHints": {
+                                "notWebReady": False
+                            }
+                        })
 
     except Exception as e:
-        # Never crash Stremio
         return {
             "streams": [],
             "error": str(e)

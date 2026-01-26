@@ -16,7 +16,7 @@ app.add_middleware(
 )
 
 # -----------------------
-# Root (Health Check)
+# Root
 # -----------------------
 
 @app.get("/")
@@ -27,31 +27,10 @@ def root():
     }
 
 # -----------------------
-# STREMIO MANIFEST
-# -----------------------
-
-@app.get("/manifest.json")
-def manifest():
-    return {
-        "id": "org.seedr.vercel.addon",
-        "version": "1.0.0",
-        "name": "Seedr Verccel Addon",
-        "description": "Stream files directly from Seedr into Stremio",
-        "resources": ["stream"],
-        "types": ["movie", "series"],
-        "catalogs": [],
-        "idPrefixes": ["tt"]
-    }
-
-# -----------------------
 # Seedr Client
 # -----------------------
 
 def get_client():
-    """
-    Uses Seedr device code authentication.
-    SEEDR_DEVICE_CODE must be set in Vercel environment variables.
-    """
     device_code = os.environ.get("SEEDR_DEVICE_CODE")
     if not device_code:
         raise Exception("SEEDR_DEVICE_CODE environment variable is missing")
@@ -67,7 +46,7 @@ def normalize(text: str):
 
 def get_movie_title(imdb_id: str):
     """
-    Fetch movie title + year from Stremio Cinemeta using IMDb ID
+    Get movie title + year from Stremio Cinemeta using IMDb ID
     """
     url = f"https://v3-cinemeta.strem.io/meta/movie/{imdb_id}.json"
     r = requests.get(url, timeout=10)
@@ -75,30 +54,169 @@ def get_movie_title(imdb_id: str):
     data = r.json()
     meta = data.get("meta", {})
     title = meta.get("name", "")
-    year = meta.get("year", "")
-    return f"{title} {year}".strip()
+    year = str(meta.get("year", ""))
+    return title, year
 
 
+def walk_files(client, folder_id=None):
+    """
+    Recursively walk through Seedr root and all subfolders
+    and yield every file found.
+    """
+    contents = client.list_contents(folder_id=folder_id)
+
+    for f in contents.files:
+        yield f
+
+    for folder in contents.folders:
+        yield from walk_files(client, folder.id)
+
+
+def extract_title_year(filename: str):
+    """
+    Try to extract title and year from a filename.
+    Example:
+      The.Matrix.1999.1080p.mkv -> ("The Matrix", "1999")
+    """
+    name = filename
+
+    year_match = re.search(r"(19|20)\d{2}", name)
+    year = year_match.group(0) if year_match else ""
+
+    # Remove extension
+    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", name, flags=re.I)
+    # Remove year
+    title = re.sub(r"(19|20)\d{2}", "", title)
+    # Replace dots and underscores
+    title = title.replace(".", " ").replace("_", " ").strip()
+
+    return title, year
+
 # -----------------------
-# STREMIO STREAM HANDLER
+# Manifest
 # -----------------------
-# This is what Stremio calls when user clicks Play
+
+@app.get("/manifest.json")
+def manifest():
+    return {
+        "id": "org.seedrcc.stremio",
+        "version": "1.1.0",
+        "name": "Seedr.cc Personal Addon",
+        "description": "Stream and browse your Seedr.cc files in Stremio",
+        "resources": ["stream", "catalog", "meta"],
+        "types": ["movie"],
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "seedr",
+                "name": "My Seedr Files"
+            }
+        ],
+        "idPrefixes": ["tt"]
+    }
+
+# -----------------------
+# Debug: See all files Seedr sees
+# -----------------------
+
+@app.get("/debug/files")
+def debug_files():
+    with get_client() as client:
+        return [
+            {
+                "file_id": f.file_id,
+                "folder_file_id": f.folder_file_id,
+                "name": f.name,
+                "size": f.size,
+                "play_video": f.play_video
+            }
+            for f in walk_files(client)
+        ]
+
+# -----------------------
+# Catalog (Browse Seedr inside Stremio)
+# -----------------------
+
+@app.get("/catalog/movie/seedr.json")
+def catalog():
+    metas = []
+
+    with get_client() as client:
+        for f in walk_files(client):
+            if not f.play_video:
+                continue
+
+            title, year = extract_title_year(f.name)
+            meta_id = normalize(title + year)
+
+            metas.append({
+                "id": meta_id,
+                "type": "movie",
+                "name": title or f.name,
+                "year": year,
+                "poster": None,
+                "description": "From your Seedr.cc account"
+            })
+
+    return {"metas": metas}
+
+# -----------------------
+# Meta (Minimal)
+# -----------------------
+
+@app.get("/meta/movie/{id}.json")
+def meta(id: str):
+    return {
+        "meta": {
+            "id": id,
+            "type": "movie",
+            "name": id
+        }
+    }
+
+# -----------------------
+# Stream endpoint (Used by Stremio movie pages)
+# -----------------------
 
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
-    """
-    For now this is a placeholder.
-    Once Seedr search + direct file link is added,
-    streams will appear inside Stremio.
-    """
+    streams = []
 
-    # Example empty response (valid for Stremio)
-    return {
-        "streams": [
-            {
-                "name": "Seedr",
-                "title": "Seedr addon is running (no stream linked yet)",
-                "url": ""
-            }
-        ]
-    }
+    if type != "movie":
+        return {"streams": []}
+
+    try:
+        # 1. Get movie title + year from IMDb via Cinemeta
+        movie_title, movie_year = get_movie_title(id)
+        norm_title = normalize(movie_title)
+
+        with get_client() as client:
+            # 2. Walk ALL files including inside folders
+            for file in walk_files(client):
+                if not file.play_video:
+                    continue
+
+                fname_norm = normalize(file.name)
+
+                # 3. Match by title + year
+                if norm_title in fname_norm and movie_year in file.name:
+                    # 4. Fetch real streaming URL from Seedr
+                    result = client.fetch_file(file.folder_file_id)
+
+                    streams.append({
+                        "name": "Seedr.cc",
+                        "title": file.name,
+                        "url": result.url,
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
+
+    except Exception as e:
+        # Never crash Stremio
+        return {
+            "streams": [],
+            "error": str(e)
+        }
+
+    return {"streams": streams}

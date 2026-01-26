@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from seedrcc import Seedr
+from upstash_redis import Redis
 import os
 import re
 import requests
 import time
 import json
-from vercel_kv import kv
 
 app = FastAPI()
 
@@ -19,6 +19,17 @@ app.add_middleware(
 )
 
 # -----------------------
+# Redis (Upstash) Client
+# -----------------------
+
+redis = Redis(
+    url=os.environ.get("UPSTASH_REDIS_REST_URL"),
+    token=os.environ.get("UPSTASH_REDIS_REST_TOKEN"),
+)
+
+CACHE_TTL = 5 * 60 * 60  # 5 hours
+
+# -----------------------
 # Root
 # -----------------------
 
@@ -26,7 +37,7 @@ app.add_middleware(
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (with KV cache)"
+        "message": "Seedr Vercel Addon running (with Upstash Redis cache)"
     }
 
 # -----------------------
@@ -96,30 +107,22 @@ def extract_title_year(filename: str):
     return title, year
 
 
-# -----------------------
-# Vercel KV Cache
-# -----------------------
-
-CACHE_TTL = 5 * 60 * 60  # 5 hours
-
-
-async def get_cached_stream_url(client, file):
+def get_cached_stream_url(client, file):
     """
-    Get cached stream URL from Vercel KV.
-    If expired or missing, generate a new Seedr URL and cache it.
+    Get cached Seedr stream URL from Redis.
+    If expired or missing, generate a new one and cache it.
     """
     key = f"seedr:stream:{file.folder_file_id}"
     now = int(time.time())
 
-    # Try KV cache
-    cached = await kv.get(key)
+    cached = redis.get(key)
 
     if cached:
         cached = json.loads(cached)
         if cached["expires"] > now:
             return cached["url"]
 
-    # Generate new Seedr URL
+    # Generate new Seedr streaming URL
     result = client.fetch_file(file.folder_file_id)
 
     data = {
@@ -127,8 +130,7 @@ async def get_cached_stream_url(client, file):
         "expires": now + CACHE_TTL
     }
 
-    # Store in KV with TTL
-    await kv.set(key, json.dumps(data), ex=CACHE_TTL)
+    redis.set(key, json.dumps(data), ex=CACHE_TTL)
 
     return result.url
 
@@ -141,9 +143,9 @@ async def get_cached_stream_url(client, file):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (with Vercel KV caching)",
+        "description": "Stream and browse your Seedr.cc files in Stremio (with Redis cache)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -225,7 +227,7 @@ def meta(id: str):
 # -----------------------
 
 @app.get("/stream/{type}/{id}.json")
-async def stream(type: str, id: str):
+def stream(type: str, id: str):
     streams = []
 
     if type != "movie":
@@ -246,7 +248,7 @@ async def stream(type: str, id: str):
                     fname_norm = normalize(file.name)
 
                     if norm_title in fname_norm and movie_year in file.name:
-                        url = await get_cached_stream_url(client, file)
+                        url = get_cached_stream_url(client, file)
 
                         streams.append({
                             "name": "Seedr.cc",
@@ -267,7 +269,7 @@ async def stream(type: str, id: str):
                     file_id = normalize(title + year)
 
                     if file_id == id:
-                        url = await get_cached_stream_url(client, file)
+                        url = get_cached_stream_url(client, file)
 
                         streams.append({
                             "name": "Seedr.cc",

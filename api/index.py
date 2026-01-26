@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/*.py": {
+    "api/index.py": {
       "runtime": "python@3.11"
     }
   }

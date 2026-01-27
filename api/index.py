@@ -21,65 +21,25 @@ app.add_middleware(
 # -----------------------
 # Upstash KV (Redis) Client
 # -----------------------
-# These come from Vercel when you connect the Upstash database
-# with prefix "UPSTASH"
-# You will have:
-#   UPSTASH_KV_REST_API_URL
-#   UPSTASH_KV_REST_API_TOKEN
-
 redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
 
-CACHE_TTL = 5 * 60 * 60  # 5 hours
-
-
-def get_cached_stream_url(client, file):
-    """
-    Get Seedr stream URL from Upstash KV.
-    If expired or missing, generate a new one and cache it.
-    """
-    key = f"seedr:stream:{file.folder_file_id}"
-    now = int(time.time())
-
-    cached = redis.get(key)
-    if cached:
-        cached = json.loads(cached)
-        if cached["expires"] > now:
-            print("KV HIT:", key)
-            return cached["url"]
-
-    print("KV MISS:", key)
-
-    # Create new Seedr streaming URL
-    result = client.fetch_file(file.folder_file_id)
-
-    data = {
-        "url": result.url,
-        "expires": now + CACHE_TTL
-    }
-
-    redis.set(key, json.dumps(data), ex=CACHE_TTL)
-    return result.url
-
-
 # -----------------------
 # Root
 # -----------------------
-
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (with Vercel KV cache)"
+        "message": "Seedr Vercel Addon running (Seedr expiry based KV cache)"
     }
 
 
 # -----------------------
 # Seedr Client
 # -----------------------
-
 def get_client():
     device_code = os.environ.get("SEEDR_DEVICE_CODE")
     if not device_code:
@@ -90,7 +50,6 @@ def get_client():
 # -----------------------
 # Helpers
 # -----------------------
-
 def normalize(text: str):
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
@@ -145,16 +104,57 @@ def extract_title_year(filename: str):
 
 
 # -----------------------
+# Seedr URL cache using real Seedr expiry
+# -----------------------
+def get_cached_stream_url(client, file):
+    """
+    Get Seedr stream URL from Upstash KV.
+    Reuse until Seedr's own expiry timestamp.
+    """
+    key = f"seedr:stream:{file.folder_file_id}"
+    now = int(time.time())
+
+    cached = redis.get(key)
+    if cached:
+        cached = json.loads(cached)
+        if cached["expires"] > now:
+            print("KV HIT:", key)
+            return cached["url"]
+        else:
+            print("KV EXPIRED:", key)
+
+    print("KV MISS:", key)
+
+    # Request new Seedr streaming URL
+    result = client.fetch_file(file.folder_file_id)
+
+    # Seedr already provides real expiry timestamp
+    seedr_expires = int(result.expires)
+
+    data = {
+        "url": result.url,
+        "expires": seedr_expires
+    }
+
+    # TTL must match Seedr expiry
+    ttl = max(seedr_expires - now, 60)  # minimum 60 seconds
+
+    redis.set(key, json.dumps(data), ex=ttl)
+    print("KV SET:", key, "TTL:", ttl, "seconds")
+
+    return result.url
+
+
+# -----------------------
 # Manifest
 # -----------------------
-
 @app.get("/manifest.json")
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (with Vercel KV / Upstash cache)",
+        "description": "Stream and browse your Seedr.cc files in Stremio (Seedr-expiry-based cache)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -168,9 +168,8 @@ def manifest():
 
 
 # -----------------------
-# Debug: See all files Seedr sees
+# Debug: See all files
 # -----------------------
-
 @app.get("/debug/files")
 def debug_files():
     with get_client() as client:
@@ -187,9 +186,8 @@ def debug_files():
 
 
 # -----------------------
-# Catalog (Browse Seedr inside Stremio)
+# Catalog
 # -----------------------
-
 @app.get("/catalog/movie/seedr.json")
 def catalog():
     metas = []
@@ -217,7 +215,6 @@ def catalog():
 # -----------------------
 # Meta (Minimal)
 # -----------------------
-
 @app.get("/meta/movie/{id}.json")
 def meta(id: str):
     return {
@@ -232,7 +229,6 @@ def meta(id: str):
 # -----------------------
 # Stream endpoint
 # -----------------------
-
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
     streams = []
@@ -243,7 +239,7 @@ def stream(type: str, id: str):
     try:
         with get_client() as client:
 
-            # CASE 1 → IMDb movie page
+            # CASE 1 → IMDb movie page (tt...)
             if id.startswith("tt"):
                 movie_title, movie_year = get_movie_title(id)
                 norm_title = normalize(movie_title)

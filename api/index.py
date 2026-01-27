@@ -4,6 +4,7 @@ from seedrcc import Seedr
 import os
 import re
 import requests
+import time
 
 app = FastAPI()
 
@@ -16,6 +17,49 @@ app.add_middleware(
 )
 
 # -----------------------
+# In-Memory Cache
+# -----------------------
+
+STREAM_CACHE = {}
+# Structure:
+# {
+#   folder_file_id: {
+#       "url": "...",
+#       "expires": unix_timestamp
+#   }
+# }
+
+CACHE_TTL = 5 * 60 * 60  # 5 hours
+
+
+def get_cached_stream_url(client, file):
+    """
+    Get Seedr stream URL from in-memory cache.
+    If expired or missing, generate a new one and cache it.
+    """
+    key = file.folder_file_id
+    now = int(time.time())
+
+    cached = STREAM_CACHE.get(key)
+
+    if cached and cached["expires"] > now:
+        print("CACHE HIT:", key)
+        return cached["url"]
+
+    print("CACHE MISS:", key)
+
+    # Generate new Seedr streaming URL
+    result = client.fetch_file(file.folder_file_id)
+
+    STREAM_CACHE[key] = {
+        "url": result.url,
+        "expires": now + CACHE_TTL
+    }
+
+    return result.url
+
+
+# -----------------------
 # Root
 # -----------------------
 
@@ -23,8 +67,9 @@ app.add_middleware(
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running"
+        "message": "Seedr Vercel Addon running (with in-memory cache)"
     }
+
 
 # -----------------------
 # Seedr Client
@@ -35,6 +80,7 @@ def get_client():
     if not device_code:
         raise Exception("SEEDR_DEVICE_CODE environment variable is missing")
     return Seedr.from_device_code(device_code)
+
 
 # -----------------------
 # Helpers
@@ -92,6 +138,7 @@ def extract_title_year(filename: str):
 
     return title, year
 
+
 # -----------------------
 # Manifest
 # -----------------------
@@ -100,9 +147,9 @@ def extract_title_year(filename: str):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.1.2",
+        "version": "1.0.0",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio",
+        "description": "Stream and browse your Seedr.cc files in Stremio (with in-memory cache)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -112,8 +159,8 @@ def manifest():
                 "name": "My Seedr Files"
             }
         ]
-        # IMPORTANT: idPrefixes REMOVED so custom IDs work
     }
+
 
 # -----------------------
 # Debug: See all files Seedr sees
@@ -132,6 +179,7 @@ def debug_files():
             }
             for f in walk_files(client)
         ]
+
 
 # -----------------------
 # Catalog (Browse Seedr inside Stremio)
@@ -160,6 +208,7 @@ def catalog():
 
     return {"metas": metas}
 
+
 # -----------------------
 # Meta (Minimal)
 # -----------------------
@@ -173,6 +222,7 @@ def meta(id: str):
             "name": id
         }
     }
+
 
 # -----------------------
 # Stream endpoint
@@ -203,11 +253,12 @@ def stream(type: str, id: str):
                     fname_norm = normalize(file.name)
 
                     if norm_title in fname_norm and movie_year in file.name:
-                        result = client.fetch_file(file.folder_file_id)
+                        url = get_cached_stream_url(client, file)
+
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,
-                            "url": result.url,
+                            "url": url,
                             "behaviorHints": {
                                 "notWebReady": False
                             }
@@ -223,11 +274,12 @@ def stream(type: str, id: str):
                     file_id = normalize(title + year)
 
                     if file_id == id:
-                        result = client.fetch_file(file.folder_file_id)
+                        url = get_cached_stream_url(client, file)
+
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,
-                            "url": result.url,
+                            "url": url,
                             "behaviorHints": {
                                 "notWebReady": False
                             }

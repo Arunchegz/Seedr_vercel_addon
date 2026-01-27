@@ -19,15 +19,50 @@ app.add_middleware(
 )
 
 # -----------------------
-# Upstash Redis (Vercel KV)
+# Upstash KV (Redis) Client
 # -----------------------
+# These come from Vercel when you connect the Upstash database
+# with prefix "UPSTASH"
+# You will have:
+#   UPSTASH_KV_REST_API_URL
+#   UPSTASH_KV_REST_API_TOKEN
 
 redis = Redis(
-    url=os.environ.get("UPSTASH_REDIS_REST_URL"),
-    token=os.environ.get("UPSTASH_REDIS_REST_TOKEN"),
+    url=os.environ.get("UPSTASH_KV_REST_API_URL"),
+    token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
 
 CACHE_TTL = 5 * 60 * 60  # 5 hours
+
+
+def get_cached_stream_url(client, file):
+    """
+    Get Seedr stream URL from Upstash KV.
+    If expired or missing, generate a new one and cache it.
+    """
+    key = f"seedr:stream:{file.folder_file_id}"
+    now = int(time.time())
+
+    cached = redis.get(key)
+    if cached:
+        cached = json.loads(cached)
+        if cached["expires"] > now:
+            print("KV HIT:", key)
+            return cached["url"]
+
+    print("KV MISS:", key)
+
+    # Create new Seedr streaming URL
+    result = client.fetch_file(file.folder_file_id)
+
+    data = {
+        "url": result.url,
+        "expires": now + CACHE_TTL
+    }
+
+    redis.set(key, json.dumps(data), ex=CACHE_TTL)
+    return result.url
+
 
 # -----------------------
 # Root
@@ -37,8 +72,9 @@ CACHE_TTL = 5 * 60 * 60  # 5 hours
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (with Vercel KV / Upstash Redis cache)"
+        "message": "Seedr Vercel Addon running (with Vercel KV cache)"
     }
+
 
 # -----------------------
 # Seedr Client
@@ -49,6 +85,7 @@ def get_client():
     if not device_code:
         raise Exception("SEEDR_DEVICE_CODE environment variable is missing")
     return Seedr.from_device_code(device_code)
+
 
 # -----------------------
 # Helpers
@@ -108,41 +145,6 @@ def extract_title_year(filename: str):
 
 
 # -----------------------
-# Cache helper (Vercel KV)
-# -----------------------
-
-def get_cached_stream_url(client, file):
-    """
-    Get Seedr stream URL from Redis.
-    If expired or missing, generate a new one and cache it.
-    """
-    key = f"seedr:stream:{file.folder_file_id}"
-    now = int(time.time())
-
-    cached = redis.get(key)
-
-    if cached:
-        cached = json.loads(cached)
-        if cached["expires"] > now:
-            print("KV CACHE HIT:", key)
-            return cached["url"]
-
-    print("KV CACHE MISS:", key)
-
-    # Generate new Seedr streaming URL
-    result = client.fetch_file(file.folder_file_id)
-
-    data = {
-        "url": result.url,
-        "expires": now + CACHE_TTL
-    }
-
-    redis.set(key, json.dumps(data), ex=CACHE_TTL)
-
-    return result.url
-
-
-# -----------------------
 # Manifest
 # -----------------------
 
@@ -150,9 +152,9 @@ def get_cached_stream_url(client, file):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.4.0",
+        "version": "1.5.0",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (with Verccel KV cache)",
+        "description": "Stream and browse your Seedr.cc files in Stremio (with Vercel KV / Upstash cache)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [

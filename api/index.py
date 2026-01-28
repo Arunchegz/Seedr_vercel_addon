@@ -5,7 +5,6 @@ from upstash_redis import Redis
 import os
 import re
 import requests
-import time
 import json
 
 app = FastAPI()
@@ -26,47 +25,6 @@ redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
-
-
-def get_cached_stream_url(client, file):
-    """
-    Permanent storage:
-    - No expires field
-    - No TTL
-    - Once stored, URL is never regenerated unless KV is manually cleared
-    """
-    key = f"seedr:stream:{file.folder_file_id}"
-
-    cached = redis.get(key)
-    if cached:
-        cached = json.loads(cached)
-        print("KV HIT (no expiry):", key)
-        return cached["url"]
-
-    print("KV MISS:", key)
-
-    result = client.fetch_file(file.folder_file_id)
-
-    data = {
-        "url": result.url
-    }
-
-    # Store permanently (no TTL)
-    redis.set(key, json.dumps(data))
-
-    return result.url
-
-
-# -----------------------
-# Root
-# -----------------------
-
-@app.get("/")
-def root():
-    return {
-        "status": "ok",
-        "message": "Seedr Vercel Addon running (No KV Expiry)"
-    }
 
 
 # -----------------------
@@ -121,6 +79,78 @@ def extract_title_year(filename: str):
 
 
 # -----------------------
+# Permanent KV Storage
+# -----------------------
+
+def get_cached_stream_url(client, file):
+    """
+    Stores Seedr URLs permanently in Upstash.
+    No expiry, no TTL.
+    """
+    key = f"seedr:stream:{file.folder_file_id}"
+
+    cached = redis.get(key)
+    if cached:
+        cached = json.loads(cached)
+        print("KV HIT:", key)
+        return cached["url"]
+
+    print("KV MISS:", key)
+
+    result = client.fetch_file(file.folder_file_id)
+
+    data = {
+        "url": result.url
+    }
+
+    redis.set(key, json.dumps(data))
+    return result.url
+
+
+# -----------------------
+# Sync KV with Seedr
+# -----------------------
+
+def sync_kv_with_seedr(client):
+    """
+    Deletes KV entries for files that no longer exist in Seedr cloud.
+    """
+
+    # All file IDs in Seedr
+    seedr_ids = set(str(f.folder_file_id) for f in walk_files(client))
+
+    # All keys in Upstash
+    keys = redis.keys("seedr:stream:*")
+
+    deleted = []
+
+    for key in keys:
+        file_id = key.split(":")[-1]
+        if file_id not in seedr_ids:
+            redis.delete(key)
+            deleted.append(key)
+            print("KV DELETE (file removed):", key)
+
+    return {
+        "total_keys": len(keys),
+        "deleted": deleted,
+        "remaining": len(keys) - len(deleted)
+    }
+
+
+# -----------------------
+# Root
+# -----------------------
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "message": "Seedr Vercel Addon running (Permanent links + Auto KV cleanup)"
+    }
+
+
+# -----------------------
 # Manifest
 # -----------------------
 
@@ -128,9 +158,9 @@ def extract_title_year(filename: str):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.6.1",
+        "version": "1.6.2",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (Permanent Links)",
+        "description": "Stream and browse your Seedr.cc files in Stremio (Permanent links + Auto cleanup)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -160,6 +190,17 @@ def debug_files():
             }
             for f in walk_files(client)
         ]
+
+
+@app.get("/debug/sync")
+def debug_sync():
+    with get_client() as client:
+        result = sync_kv_with_seedr(client)
+        return {
+            "status": "ok",
+            "message": "KV synced with Seedr cloud",
+            "result": result
+        }
 
 
 # -----------------------
@@ -218,6 +259,9 @@ def stream(type: str, id: str):
 
     try:
         with get_client() as client:
+
+            # 🔥 Auto-clean KV entries for removed files
+            sync_kv_with_seedr(client)
 
             # IMDb matching
             if id.startswith("tt"):

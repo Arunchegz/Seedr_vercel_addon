@@ -27,7 +27,7 @@ redis = Redis(
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
 
-CACHE_TTL = 5 * 60 * 60  # 5 hours
+CACHE_TTL = 7 * 24 * 60 * 60  # 7 days
 
 
 def get_cached_stream_url(client, file):

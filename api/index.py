@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # -----------------------
-# Upstash KV
+# Upstash KV (NO EXPIRY)
 # -----------------------
 
 redis = Redis(
@@ -27,30 +27,33 @@ redis = Redis(
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
 
-CACHE_TTL = 7 * 24 * 60 * 60  # 7 days
-
 
 def get_cached_stream_url(client, file):
+    """
+    Permanent storage:
+    - No expires field
+    - No TTL
+    - Once stored, URL is never regenerated unless KV is manually cleared
+    """
     key = f"seedr:stream:{file.folder_file_id}"
-    now = int(time.time())
 
     cached = redis.get(key)
     if cached:
         cached = json.loads(cached)
-        if cached["expires"] > now:
-            print("KV HIT:", key)
-            return cached["url"]
+        print("KV HIT (no expiry):", key)
+        return cached["url"]
 
     print("KV MISS:", key)
 
     result = client.fetch_file(file.folder_file_id)
 
     data = {
-        "url": result.url,
-        "expires": now + CACHE_TTL
+        "url": result.url
     }
 
-    redis.set(key, json.dumps(data), ex=CACHE_TTL)
+    # Store permanently (no TTL)
+    redis.set(key, json.dumps(data))
+
     return result.url
 
 
@@ -62,7 +65,7 @@ def get_cached_stream_url(client, file):
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running"
+        "message": "Seedr Vercel Addon running (No KV Expiry)"
     }
 
 
@@ -125,9 +128,9 @@ def extract_title_year(filename: str):
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.6.0",
+        "version": "1.6.1",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio",
+        "description": "Stream and browse your Seedr.cc files in Stremio (Permanent Links)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -216,7 +219,7 @@ def stream(type: str, id: str):
     try:
         with get_client() as client:
 
-            # IMDb
+            # IMDb matching
             if id.startswith("tt"):
                 movie_title, movie_year = get_movie_title(id)
                 norm_title = normalize(movie_title)
@@ -236,7 +239,7 @@ def stream(type: str, id: str):
                             "behaviorHints": {"notWebReady": False}
                         })
 
-            # Catalog + filename IDs
+            # Catalog / filename matching
             else:
                 id_norm = normalize(id)
 

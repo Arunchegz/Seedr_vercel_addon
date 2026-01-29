@@ -18,15 +18,13 @@ app.add_middleware(
 )
 
 # -----------------------
-# Upstash KV
+# Upstash KV (NO EXPIRY)
 # -----------------------
 
 redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
 )
-
-CACHE_TTL = 60 * 60 * 24  # 24 hours
 
 
 # -----------------------
@@ -81,34 +79,34 @@ def extract_title_year(filename: str):
 
 
 # -----------------------
-# KV Storage (with metadata + 24h TTL)
+# Permanent KV Storage
 # -----------------------
 
-def get_cached_stream_data(client, file):
+def get_cached_stream_url(client, file):
+    """
+    Stores Seedr URLs in Upstash with 24 hours expiry.
+    """
     key = f"seedr:stream:{file.folder_file_id}"
 
     cached = redis.get(key)
     if cached:
+        cached = json.loads(cached)
         print("KV HIT:", key)
-        return json.loads(cached)
+        return cached["url"]
 
     print("KV MISS:", key)
 
     result = client.fetch_file(file.folder_file_id)
 
-    title, year = extract_title_year(file.name)
-    meta_id = normalize(title + year)
-
     data = {
-        "url": result.url,
-        "name": file.name,
-        "title": title,
-        "year": year,
-        "meta_id": meta_id
+        "url": result.url
     }
 
-    redis.set(key, json.dumps(data), ex=CACHE_TTL)
-    return data
+    # 24 hours = 60 * 60 * 24 = 86400 seconds
+    redis.set(key, json.dumps(data), ex=86400)
+
+    return result.url
+
 
 
 # -----------------------
@@ -116,7 +114,14 @@ def get_cached_stream_data(client, file):
 # -----------------------
 
 def sync_kv_with_seedr(client):
+    """
+    Deletes KV entries for files that no longer exist in Seedr cloud.
+    """
+
+    # All file IDs in Seedr
     seedr_ids = set(str(f.folder_file_id) for f in walk_files(client))
+
+    # All keys in Upstash
     keys = redis.keys("seedr:stream:*")
 
     deleted = []
@@ -143,7 +148,7 @@ def sync_kv_with_seedr(client):
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (KV-first, 24h TTL, catalog-safe)"
+        "message": "Seedr Vercel Addon running (Permanent links + Auto KV cleanup)"
     }
 
 
@@ -155,9 +160,9 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.7.2",
+        "version": "1.6.2",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (KV-first, 24h cache, auto cleanup)",
+        "description": "Stream and browse your Seedr.cc files in Stremio (Permanent links + Auto cleanup)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -244,52 +249,23 @@ def meta(id: str):
 
 
 # -----------------------
-# Stream (KV FIRST → Seedr fallback)
+# Stream
 # -----------------------
 
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
-    print("STREAM REQUEST:", type, id)
     streams = []
 
     if type != "movie":
         return {"streams": []}
 
     try:
-        # ---------------------------------
-        # 1. Use KV only for catalog IDs
-        # ---------------------------------
-        if not id.startswith("tt"):
-            keys = redis.keys("seedr:stream:*")
-
-            for key in keys:
-                cached = redis.get(key)
-                if not cached:
-                    continue
-
-                data = json.loads(cached)
-
-                if data["meta_id"] == id:
-                    streams.append({
-                        "name": "Seedr.cc",
-                        "title": data["name"],
-                        "url": data["url"],
-                        "behaviorHints": {"notWebReady": False}
-                    })
-
-            if streams:
-                print("KV HIT (catalog) → Seedr API not called")
-                return {"streams": streams}
-
-        # ---------------------------------
-        # 2. Fallback to Seedr API
-        # ---------------------------------
-        print("Calling Seedr API")
-
         with get_client() as client:
+
+            # 🔥 Auto-clean KV entries for removed files
             sync_kv_with_seedr(client)
 
-            # IMDb matching (TITLE ONLY, YEAR OPTIONAL)
+            # IMDb matching
             if id.startswith("tt"):
                 movie_title, movie_year = get_movie_title(id)
                 norm_title = normalize(movie_title)
@@ -300,13 +276,12 @@ def stream(type: str, id: str):
 
                     fname_norm = normalize(file.name)
 
-                    # Title match is enough
-                    if norm_title in fname_norm:
-                        data = get_cached_stream_data(client, file)
+                    if norm_title in fname_norm and movie_year in file.name:
+                        url = get_cached_stream_url(client, file)
                         streams.append({
                             "name": "Seedr.cc",
-                            "title": data["name"],
-                            "url": data["url"],
+                            "title": file.name,
+                            "url": url,
                             "behaviorHints": {"notWebReady": False}
                         })
 
@@ -323,11 +298,11 @@ def stream(type: str, id: str):
                     file_id = normalize(title + year)
 
                     if file_id == id or fname_norm == id_norm or id_norm in fname_norm:
-                        data = get_cached_stream_data(client, file)
+                        url = get_cached_stream_url(client, file)
                         streams.append({
                             "name": "Seedr.cc",
-                            "title": data["name"],
-                            "url": data["url"],
+                            "title": file.name,
+                            "url": url,
                             "behaviorHints": {"notWebReady": False}
                         })
 

@@ -84,8 +84,7 @@ def extract_title_year(filename: str):
 
 def get_cached_stream_url(client, file):
     """
-    Stores Seedr URLs permanently in Upstash.
-    No expiry, no TTL.
+    Stores Seedr URLs in Upstash with 24 hours expiry.
     """
     key = f"seedr:stream:{file.folder_file_id}"
 
@@ -103,7 +102,9 @@ def get_cached_stream_url(client, file):
         "url": result.url
     }
 
-    redis.set(key, json.dumps(data))
+    # 24 hours = 60 * 60 * 24 = 86400 seconds
+    redis.set(key, json.dumps(data), ex=86400)
+
     return result.url
 
 

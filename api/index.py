@@ -265,39 +265,37 @@ def stream(type: str, id: str):
 
     try:
         # --------------------------------
-        # 1. CHECK UPSTASH KV FIRST
+        # 1. USE KV ONLY FOR CATALOG IDs
         # --------------------------------
-        keys = redis.keys("seedr:stream:*")
+        if not id.startswith("tt"):
+            keys = redis.keys("seedr:stream:*")
 
-        for key in keys:
-            cached = redis.get(key)
-            if not cached:
-                continue
+            for key in keys:
+                cached = redis.get(key)
+                if not cached:
+                    continue
 
-            data = json.loads(cached)
+                data = json.loads(cached)
 
-            # Match against catalog ID
-            if data["meta_id"] == id:
-                streams.append(
-                    {
+                if data["meta_id"] == id:
+                    streams.append({
                         "name": "Seedr.cc",
                         "title": data["name"],
                         "url": data["url"],
-                        "behaviorHints": {"notWebReady": False},
-                    }
-                )
+                        "behaviorHints": {"notWebReady": False}
+                    })
 
-        if streams:
-            print("KV HIT → Seedr API not called")
-            return {"streams": streams}
+            if streams:
+                print("KV HIT (catalog) → Seedr API not called")
+                return {"streams": streams}
 
         # --------------------------------
         # 2. FALLBACK TO SEEDR API
+        #    (Always for IMDb IDs)
         # --------------------------------
-        print("KV MISS → Calling Seedr API")
+        print("Calling Seedr API")
 
         with get_client() as client:
-            # Clean stale keys
             sync_kv_with_seedr(client)
 
             # IMDb matching
@@ -313,14 +311,12 @@ def stream(type: str, id: str):
 
                     if norm_title in fname_norm and movie_year in file.name:
                         data = get_cached_stream_data(client, file)
-                        streams.append(
-                            {
-                                "name": "Seedr.cc",
-                                "title": data["name"],
-                                "url": data["url"],
-                                "behaviorHints": {"notWebReady": False},
-                            }
-                        )
+                        streams.append({
+                            "name": "Seedr.cc",
+                            "title": data["name"],
+                            "url": data["url"],
+                            "behaviorHints": {"notWebReady": False}
+                        })
 
             # Catalog / filename matching
             else:
@@ -336,14 +332,18 @@ def stream(type: str, id: str):
 
                     if file_id == id or fname_norm == id_norm or id_norm in fname_norm:
                         data = get_cached_stream_data(client, file)
-                        streams.append(
-                            {
-                                "name": "Seedr.cc",
-                                "title": data["name"],
-                                "url": data["url"],
-                                "behaviorHints": {"notWebReady": False},
-                            }
-                        )
+                        streams.append({
+                            "name": "Seedr.cc",
+                            "title": data["name"],
+                            "url": data["url"],
+                            "behaviorHints": {"notWebReady": False}
+                        })
+
+    except Exception as e:
+        return {"streams": [], "error": str(e)}
+
+    return {"streams": streams}
+
 
     except Exception as e:
         return {"streams": [], "error": str(e)}

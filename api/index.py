@@ -85,9 +85,6 @@ def extract_title_year(filename: str):
 # -----------------------
 
 def get_cached_stream_data(client, file):
-    """
-    Cache Seedr URLs with metadata so KV can fully replace Seedr lookups.
-    """
     key = f"seedr:stream:{file.folder_file_id}"
 
     cached = redis.get(key)
@@ -119,10 +116,6 @@ def get_cached_stream_data(client, file):
 # -----------------------
 
 def sync_kv_with_seedr(client):
-    """
-    Deletes KV entries for files that no longer exist in Seedr cloud.
-    """
-
     seedr_ids = set(str(f.folder_file_id) for f in walk_files(client))
     keys = redis.keys("seedr:stream:*")
 
@@ -162,7 +155,7 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.7.1",
+        "version": "1.7.2",
         "name": "Seedr.cc Personal Addon",
         "description": "Stream and browse your Seedr.cc files in Stremio (KV-first, 24h cache, auto cleanup)",
         "resources": ["stream", "catalog", "meta"],
@@ -256,15 +249,16 @@ def meta(id: str):
 
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
+    print("STREAM REQUEST:", type, id)
     streams = []
 
     if type != "movie":
         return {"streams": []}
 
     try:
-        # -------------------------------
-        # 1. Use KV ONLY for catalog IDs
-        # -------------------------------
+        # ---------------------------------
+        # 1. Use KV only for catalog IDs
+        # ---------------------------------
         if not id.startswith("tt"):
             keys = redis.keys("seedr:stream:*")
 
@@ -287,15 +281,15 @@ def stream(type: str, id: str):
                 print("KV HIT (catalog) → Seedr API not called")
                 return {"streams": streams}
 
-        # -------------------------------
+        # ---------------------------------
         # 2. Fallback to Seedr API
-        # -------------------------------
+        # ---------------------------------
         print("Calling Seedr API")
 
         with get_client() as client:
             sync_kv_with_seedr(client)
 
-            # IMDb matching
+            # IMDb matching (TITLE ONLY, YEAR OPTIONAL)
             if id.startswith("tt"):
                 movie_title, movie_year = get_movie_title(id)
                 norm_title = normalize(movie_title)
@@ -306,7 +300,8 @@ def stream(type: str, id: str):
 
                     fname_norm = normalize(file.name)
 
-                    if norm_title in fname_norm and movie_year in file.name:
+                    # Title match is enough
+                    if norm_title in fname_norm:
                         data = get_cached_stream_data(client, file)
                         streams.append({
                             "name": "Seedr.cc",

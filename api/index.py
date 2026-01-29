@@ -107,7 +107,7 @@ def get_cached_stream_data(client, file):
         "name": file.name,
         "title": title,
         "year": year,
-        "meta_id": meta_id,
+        "meta_id": meta_id
     }
 
     redis.set(key, json.dumps(data), ex=CACHE_TTL)
@@ -138,7 +138,7 @@ def sync_kv_with_seedr(client):
     return {
         "total_keys": len(keys),
         "deleted": deleted,
-        "remaining": len(keys) - len(deleted),
+        "remaining": len(keys) - len(deleted)
     }
 
 
@@ -150,7 +150,7 @@ def sync_kv_with_seedr(client):
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (KV first, 24h TTL, catalog-safe)",
+        "message": "Seedr Vercel Addon running (KV-first, 24h TTL, catalog-safe)"
     }
 
 
@@ -162,7 +162,7 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.7.0",
+        "version": "1.7.1",
         "name": "Seedr.cc Personal Addon",
         "description": "Stream and browse your Seedr.cc files in Stremio (KV-first, 24h cache, auto cleanup)",
         "resources": ["stream", "catalog", "meta"],
@@ -171,9 +171,9 @@ def manifest():
             {
                 "type": "movie",
                 "id": "seedr",
-                "name": "My Seedr Files",
+                "name": "My Seedr Files"
             }
-        ],
+        ]
     }
 
 
@@ -190,7 +190,7 @@ def debug_files():
                 "folder_file_id": f.folder_file_id,
                 "name": f.name,
                 "size": f.size,
-                "play_video": f.play_video,
+                "play_video": f.play_video
             }
             for f in walk_files(client)
         ]
@@ -203,7 +203,7 @@ def debug_sync():
         return {
             "status": "ok",
             "message": "KV synced with Seedr cloud",
-            "result": result,
+            "result": result
         }
 
 
@@ -223,16 +223,14 @@ def catalog():
             title, year = extract_title_year(f.name)
             meta_id = normalize(title + year)
 
-            metas.append(
-                {
-                    "id": meta_id,
-                    "type": "movie",
-                    "name": title or f.name,
-                    "year": year,
-                    "poster": None,
-                    "description": "From your Seedr.cc account",
-                }
-            )
+            metas.append({
+                "id": meta_id,
+                "type": "movie",
+                "name": title or f.name,
+                "year": year,
+                "poster": None,
+                "description": "From your Seedr.cc account"
+            })
 
     return {"metas": metas}
 
@@ -247,7 +245,7 @@ def meta(id: str):
         "meta": {
             "id": id,
             "type": "movie",
-            "name": id,
+            "name": id
         }
     }
 
@@ -264,9 +262,9 @@ def stream(type: str, id: str):
         return {"streams": []}
 
     try:
-        # --------------------------------
-        # 1. USE KV ONLY FOR CATALOG IDs
-        # --------------------------------
+        # -------------------------------
+        # 1. Use KV ONLY for catalog IDs
+        # -------------------------------
         if not id.startswith("tt"):
             keys = redis.keys("seedr:stream:*")
 
@@ -289,10 +287,9 @@ def stream(type: str, id: str):
                 print("KV HIT (catalog) → Seedr API not called")
                 return {"streams": streams}
 
-        # --------------------------------
-        # 2. FALLBACK TO SEEDR API
-        #    (Always for IMDb IDs)
-        # --------------------------------
+        # -------------------------------
+        # 2. Fallback to Seedr API
+        # -------------------------------
         print("Calling Seedr API")
 
         with get_client() as client:
@@ -338,12 +335,6 @@ def stream(type: str, id: str):
                             "url": data["url"],
                             "behaviorHints": {"notWebReady": False}
                         })
-
-    except Exception as e:
-        return {"streams": [], "error": str(e)}
-
-    return {"streams": streams}
-
 
     except Exception as e:
         return {"streams": [], "error": str(e)}

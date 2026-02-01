@@ -1,15 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from seedrcc import Seedr
-from upstash_redis import Redis
 import os
 import re
 import requests
-import json
 
 app = FastAPI()
 
-# Allow Stremio + browser access
+# -----------------------
+# CORS (Stremio + Browser)
+# -----------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,54 +18,19 @@ app.add_middleware(
 )
 
 # -----------------------
-# Upstash KV (NO EXPIRY)
-# -----------------------
-
-redis = Redis(
-    url=os.environ.get("UPSTASH_KV_REST_API_URL"),
-    token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
-)
-
-
-# -----------------------
 # Seedr Client
 # -----------------------
-
 def get_client():
     device_code = os.environ.get("SEEDR_DEVICE_CODE")
     if not device_code:
         raise Exception("SEEDR_DEVICE_CODE environment variable is missing")
     return Seedr.from_device_code(device_code)
 
-
 # -----------------------
 # Helpers
 # -----------------------
-
 def normalize(text: str):
     return re.sub(r"[^a-z0-9]", "", text.lower())
-
-
-def get_movie_title(imdb_id: str):
-    url = f"https://v3-cinemeta.strem.io/meta/movie/{imdb_id}.json"
-    r = requests.get(url, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    meta = data.get("meta", {})
-    title = meta.get("name", "")
-    year = str(meta.get("year", ""))
-    return title, year
-
-
-def walk_files(client, folder_id=None):
-    contents = client.list_contents(folder_id=folder_id)
-
-    for f in contents.files:
-        yield f
-
-    for folder in contents.folders:
-        yield from walk_files(client, folder.id)
-
 
 def extract_title_year(filename: str):
     year_match = re.search(r"(19|20)\d{2}", filename)
@@ -77,92 +42,49 @@ def extract_title_year(filename: str):
 
     return title, year
 
+def walk_files(client, folder_id=None):
+    contents = client.list_contents(folder_id=folder_id)
 
-# -----------------------
-# Permanent KV Storage
-# -----------------------
+    for f in contents.files:
+        yield f
 
-def get_cached_stream_url(client, file):
-    """
-    Stores Seedr URLs in Upstash with 24 hours expiry.
-    """
-    key = f"seedr:stream:{file.folder_file_id}"
+    for folder in contents.folders:
+        yield from walk_files(client, folder.id)
 
-    cached = redis.get(key)
-    if cached:
-        cached = json.loads(cached)
-        print("KV HIT:", key)
-        return cached["url"]
+def get_movie_title(imdb_id: str):
+    try:
+        url = f"https://v3-cinemeta.strem.io/meta/movie/{imdb_id}.json"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        meta = r.json().get("meta", {})
+        return meta.get("name", ""), str(meta.get("year", ""))
+    except Exception:
+        return "", ""
 
-    print("KV MISS:", key)
-
+def get_fresh_stream_url(client, file):
     result = client.fetch_file(file.folder_file_id)
-
-    data = {
-        "url": result.url
-    }
-
-    # 24 hours = 60 * 60 * 24 = 86400 seconds
-    redis.set(key, json.dumps(data), ex=86400)
-
     return result.url
-
-
-
-# -----------------------
-# Sync KV with Seedr
-# -----------------------
-
-def sync_kv_with_seedr(client):
-    """
-    Deletes KV entries for files that no longer exist in Seedr cloud.
-    """
-
-    # All file IDs in Seedr
-    seedr_ids = set(str(f.folder_file_id) for f in walk_files(client))
-
-    # All keys in Upstash
-    keys = redis.keys("seedr:stream:*")
-
-    deleted = []
-
-    for key in keys:
-        file_id = key.split(":")[-1]
-        if file_id not in seedr_ids:
-            redis.delete(key)
-            deleted.append(key)
-            print("KV DELETE (file removed):", key)
-
-    return {
-        "total_keys": len(keys),
-        "deleted": deleted,
-        "remaining": len(keys) - len(deleted)
-    }
-
 
 # -----------------------
 # Root
 # -----------------------
-
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "message": "Seedr Vercel Addon running (Permanent links + Auto KV cleanup)"
+        "message": "Seedr Stremio Addon running (Fresh URL on every request)"
     }
-
 
 # -----------------------
 # Manifest
 # -----------------------
-
 @app.get("/manifest.json")
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.6.2",
+        "version": "2.0.0",
         "name": "Seedr.cc Personal Addon",
-        "description": "Stream and browse your Seedr.cc files in Stremio (Permanent links + Auto cleanup)",
+        "description": "Stream your Seedr.cc files in Stremio (always fresh links)",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -174,57 +96,25 @@ def manifest():
         ]
     }
 
-
-# -----------------------
-# Debug
-# -----------------------
-
-@app.get("/debug/files")
-def debug_files():
-    with get_client() as client:
-        return [
-            {
-                "file_id": f.file_id,
-                "folder_file_id": f.folder_file_id,
-                "name": f.name,
-                "size": f.size,
-                "play_video": f.play_video
-            }
-            for f in walk_files(client)
-        ]
-
-
-@app.get("/debug/sync")
-def debug_sync():
-    with get_client() as client:
-        result = sync_kv_with_seedr(client)
-        return {
-            "status": "ok",
-            "message": "KV synced with Seedr cloud",
-            "result": result
-        }
-
-
 # -----------------------
 # Catalog
 # -----------------------
-
 @app.get("/catalog/movie/seedr.json")
 def catalog():
     metas = []
 
     with get_client() as client:
-        for f in walk_files(client):
-            if not f.play_video:
+        for file in walk_files(client):
+            if not file.play_video:
                 continue
 
-            title, year = extract_title_year(f.name)
-            meta_id = normalize(title + year)
+            title, year = extract_title_year(file.name)
+            meta_id = f"seedr:{file.folder_file_id}"
 
             metas.append({
                 "id": meta_id,
                 "type": "movie",
-                "name": title or f.name,
+                "name": title or file.name,
                 "year": year,
                 "poster": None,
                 "description": "From your Seedr.cc account"
@@ -232,11 +122,9 @@ def catalog():
 
     return {"metas": metas}
 
-
 # -----------------------
 # Meta
 # -----------------------
-
 @app.get("/meta/movie/{id}.json")
 def meta(id: str):
     return {
@@ -247,11 +135,9 @@ def meta(id: str):
         }
     }
 
-
 # -----------------------
 # Stream
 # -----------------------
-
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
     streams = []
@@ -262,10 +148,7 @@ def stream(type: str, id: str):
     try:
         with get_client() as client:
 
-            # 🔥 Auto-clean KV entries for removed files
-            sync_kv_with_seedr(client)
-
-            # IMDb matching
+            # IMDb-based matching
             if id.startswith("tt"):
                 movie_title, movie_year = get_movie_title(id)
                 norm_title = normalize(movie_title)
@@ -275,36 +158,36 @@ def stream(type: str, id: str):
                         continue
 
                     fname_norm = normalize(file.name)
+                    title_match = norm_title and norm_title in fname_norm
+                    year_match = not movie_year or movie_year in fname_norm
 
-                    if norm_title in fname_norm and movie_year in file.name:
-                        url = get_cached_stream_url(client, file)
+                    if title_match and year_match:
+                        url = get_fresh_stream_url(client, file)
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,
                             "url": url,
-                            "behaviorHints": {"notWebReady": False}
+                            "behaviorHints": {
+                                "notWebReady": False
+                            }
                         })
 
-            # Catalog / filename matching
-            else:
-                id_norm = normalize(id)
+            # Catalog / direct file matching
+            elif id.startswith("seedr:"):
+                file_id = id.split(":", 1)[1]
 
                 for file in walk_files(client):
-                    if not file.play_video:
-                        continue
-
-                    fname_norm = normalize(file.name)
-                    title, year = extract_title_year(file.name)
-                    file_id = normalize(title + year)
-
-                    if file_id == id or fname_norm == id_norm or id_norm in fname_norm:
-                        url = get_cached_stream_url(client, file)
+                    if str(file.folder_file_id) == file_id:
+                        url = get_fresh_stream_url(client, file)
                         streams.append({
                             "name": "Seedr.cc",
                             "title": file.name,
                             "url": url,
-                            "behaviorHints": {"notWebReady": False}
+                            "behaviorHints": {
+                                "notWebReady": False
+                            }
                         })
+                        break
 
     except Exception as e:
         return {"streams": [], "error": str(e)}

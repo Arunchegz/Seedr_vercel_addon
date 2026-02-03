@@ -4,213 +4,216 @@ from seedrcc import Seedr
 import os
 import re
 import requests
-from collections import defaultdict
 
 app = FastAPI()
 
-# -----------------------
-# CORS
-# -----------------------
+-----------------------
+
+CORS (Stremio + Browser)
+
+-----------------------
+
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+CORSMiddleware,
+allow_origins=[""],
+allow_methods=[""],
+allow_headers=["*"],
 )
 
-# -----------------------
-# Seedr Client
-# -----------------------
-def get_client():
-    device_code = os.environ.get("SEEDR_DEVICE_CODE")
-    if not device_code:
-        raise Exception("SEEDR_DEVICE_CODE missing")
-    return Seedr.from_device_code(device_code)
+-----------------------
 
-# -----------------------
-# Helpers
-# -----------------------
+Seedr Client
+
+-----------------------
+
+def get_client():
+device_code = os.environ.get("SEEDR_DEVICE_CODE")
+if not device_code:
+raise Exception("SEEDR_DEVICE_CODE environment variable is missing")
+return Seedr.from_device_code(device_code)
+
+-----------------------
+
+Helpers
+
+-----------------------
+
 def normalize(text: str):
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+return re.sub(r"[^a-z0-9]", "", text.lower())
 
 def extract_title_year(filename: str):
-    year_match = re.search(r"(19|20)\d{2}", filename)
-    year = year_match.group(0) if year_match else ""
+year_match = re.search(r"(19|20)\d{2}", filename)
+year = year_match.group(0) if year_match else ""
 
-    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)
-    title = re.sub(r"(19|20)\d{2}", "", title)
-    title = title.replace(".", " ").replace("_", " ").strip()
+title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)  
+title = re.sub(r"(19|20)\d{2}", "", title)  
+title = title.replace(".", " ").replace("_", " ").strip()  
 
-    return title, year
-
-def extract_season_episode(name: str):
-    patterns = [
-        r"S(\d{1,2})E(\d{1,2})",
-        r"(\d{1,2})x(\d{1,2})",
-        r"Season\s*(\d{1,2}).*Episode\s*(\d{1,2})"
-    ]
-
-    for p in patterns:
-        m = re.search(p, name, re.I)
-        if m:
-            return int(m.group(1)), int(m.group(2))
-    return None, None
+return title, year
 
 def walk_files(client, folder_id=None):
-    contents = client.list_contents(folder_id=folder_id)
+contents = client.list_contents(folder_id=folder_id)
 
-    for f in contents.files:
-        yield f
+for f in contents.files:  
+    yield f  
 
-    for folder in contents.folders:
-        yield from walk_files(client, folder.id)
+for folder in contents.folders:  
+    yield from walk_files(client, folder.id)
 
-def get_meta(type_: str, imdb_id: str):
-    url = f"https://v3-cinemeta.strem.io/meta/{type_}/{imdb_id}.json"
-    r = requests.get(url, timeout=10)
-    r.raise_for_status()
-    return r.json()["meta"]
+def get_movie_title(imdb_id: str):
+try:
+url = f"https://v3-cinemeta.strem.io/meta/movie/{imdb_id}.json"
+r = requests.get(url, timeout=10)
+r.raise_for_status()
+meta = r.json().get("meta", {})
+return meta.get("name", ""), str(meta.get("year", ""))
+except Exception:
+return "", ""
 
 def get_fresh_stream_url(client, file):
-    return client.fetch_file(file.folder_file_id).url
+result = client.fetch_file(file.folder_file_id)
+return result.url
 
-# -----------------------
-# Root
-# -----------------------
+-----------------------
+
+Root
+
+-----------------------
+
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Seedr Stremio Addon (Movies + Series)"}
+return {
+"status": "ok",
+"message": "Seedr Stremio Addon running (Fresh URL on every request)"
+}
 
-# -----------------------
-# Manifest
-# -----------------------
+-----------------------
+
+Manifest
+
+-----------------------
+
 @app.get("/manifest.json")
 def manifest():
-    return {
-        "id": "org.seedrcc.stremio",
-        "version": "3.0.0",
-        "name": "Seedr.cc Personal Addon",
-        "description": "Stream movies & series from Seedr.cc",
-        "resources": ["stream", "catalog", "meta"],
-        "types": ["movie", "series"],
-        "catalogs": [
-            {"type": "movie", "id": "seedr_movies", "name": "My Movies"},
-            {"type": "series", "id": "seedr_series", "name": "My Series"}
-        ]
-    }
+return {
+"id": "org.seedrcc.stremio",
+"version": "2.0.0",
+"name": "Seedr.cc Personal Addon",
+"description": "Stream your Seedr.cc files in Stremio (always fresh links)",
+"resources": ["stream", "catalog", "meta"],
+"types": ["movie"],
+"catalogs": [
+{
+"type": "movie",
+"id": "seedr",
+"name": "My Seedr Files"
+}
+]
+}
 
-# -----------------------
-# Catalog
-# -----------------------
-@app.get("/catalog/{type}/{id}.json")
-def catalog(type: str, id: str):
-    metas = []
-    seen_series = set()
+-----------------------
 
-    with get_client() as client:
-        for file in walk_files(client):
-            if not file.play_video:
-                continue
+Catalog
 
-            name = file.name
+-----------------------
 
-            # Movies
-            if type == "movie":
-                title, year = extract_title_year(name)
-                metas.append({
-                    "id": f"seedr:{file.folder_file_id}",
-                    "type": "movie",
-                    "name": title or name,
-                    "year": year
-                })
+@app.get("/catalog/movie/seedr.json")
+def catalog():
+metas = []
 
-            # Series
-            elif type == "series":
-                season, episode = extract_season_episode(name)
-                if season is None:
-                    continue
+with get_client() as client:  
+    for file in walk_files(client):  
+        if not file.play_video:  
+            continue  
 
-                series_title = re.split(r"S\d{1,2}E\d{1,2}|\d+x\d+", name, flags=re.I)[0]
-                series_title = series_title.replace(".", " ").strip()
+        title, year = extract_title_year(file.name)  
+        meta_id = f"seedr:{file.folder_file_id}"  
 
-                norm = normalize(series_title)
-                if norm in seen_series:
-                    continue
+        metas.append({  
+            "id": meta_id,  
+            "type": "movie",  
+            "name": title or file.name,  
+            "year": year,  
+            "poster": None,  
+            "description": "From your Seedr.cc account"  
+        })  
 
-                seen_series.add(norm)
+return {"metas": metas}
 
-                metas.append({
-                    "id": f"seedr_series:{norm}",
-                    "type": "series",
-                    "name": series_title
-                })
+-----------------------
 
-    return {"metas": metas}
+Meta
 
-# -----------------------
-# Meta (Series Seasons)
-# -----------------------
-@app.get("/meta/series/{id}.json")
-def series_meta(id: str):
-    seasons = defaultdict(set)
+-----------------------
 
-    with get_client() as client:
-        for file in walk_files(client):
-            season, episode = extract_season_episode(file.name)
-            if season:
-                seasons[season].add(episode)
+@app.get("/meta/movie/{id}.json")
+def meta(id: str):
+return {
+"meta": {
+"id": id,
+"type": "movie",
+"name": id
+}
+}
 
-    return {
-        "meta": {
-            "id": id,
-            "type": "series",
-            "name": id,
-            "videos": [
-                {
-                    "id": f"{id}:{s}:{e}",
-                    "season": s,
-                    "episode": e,
-                    "title": f"S{s:02d}E{e:02d}"
-                }
-                for s in sorted(seasons)
-                for e in sorted(seasons[s])
-            ]
-        }
-    }
+-----------------------
 
-# -----------------------
-# Stream (Movies + Episodes)
-# -----------------------
+Stream
+
+-----------------------
+
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
-    streams = []
+streams = []
 
-    with get_client() as client:
-        # ---------------- Movies ----------------
-        if type == "movie":
-            for file in walk_files(client):
-                if f"seedr:{file.folder_file_id}" == id:
-                    streams.append({
-                        "name": "Seedr.cc",
-                        "title": file.name,
-                        "url": get_fresh_stream_url(client, file)
-                    })
-                    break
+if type != "movie":  
+    return {"streams": []}  
 
-        # ---------------- Episodes ----------------
-        elif type == "series":
-            _, season, episode = id.split(":")
-            season = int(season)
-            episode = int(episode)
+try:  
+    with get_client() as client:  
 
-            for file in walk_files(client):
-                s, e = extract_season_episode(file.name)
-                if s == season and e == episode:
-                    streams.append({
-                        "name": "Seedr.cc",
-                        "title": file.name,
-                        "url": get_fresh_stream_url(client, file)
-                    })
-                    break
+        # IMDb-based matching  
+        if id.startswith("tt"):  
+            movie_title, movie_year = get_movie_title(id)  
+            norm_title = normalize(movie_title)  
 
-    return {"streams": streams}
+            for file in walk_files(client):  
+                if not file.play_video:  
+                    continue  
+
+                fname_norm = normalize(file.name)  
+                title_match = norm_title and norm_title in fname_norm  
+                year_match = not movie_year or movie_year in fname_norm  
+
+                if title_match and year_match:  
+                    url = get_fresh_stream_url(client, file)  
+                    streams.append({  
+                        "name": "Seedr.cc",  
+                        "title": file.name,  
+                        "url": url,  
+                        "behaviorHints": {  
+                            "notWebReady": False  
+                        }  
+                    })  
+
+        # Catalog / direct file matching  
+        elif id.startswith("seedr:"):  
+            file_id = id.split(":", 1)[1]  
+
+            for file in walk_files(client):  
+                if str(file.folder_file_id) == file_id:  
+                    url = get_fresh_stream_url(client, file)  
+                    streams.append({  
+                        "name": "Seedr.cc",  
+                        "title": file.name,  
+                        "url": url,  
+                        "behaviorHints": {  
+                            "notWebReady": False  
+                        }  
+                    })  
+                    break  
+
+except Exception as e:  
+    return {"streams": [], "error": str(e)}  
+
+return {"streams": streams}

@@ -36,13 +36,12 @@ def seedr_request(endpoint, params=None):
     if not api_token:
         raise Exception("SEEDR_API_TOKEN missing")
 
-    headers = {
-        "Authorization": f"Bearer {api_token}"
-    }
-
     url = f"{SEEDR_API}/{endpoint}"
 
-    r = requests.get(url, headers=headers, params=params or {}, timeout=15)
+    params = params or {}
+    params["access_token"] = api_token  # ✅ FIXED
+
+    r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -69,7 +68,6 @@ def extract_title_year(filename):
 
 def walk_files(folder_id=None):
     params = {}
-
     if folder_id is not None:
         params["folder_id"] = folder_id
 
@@ -112,7 +110,7 @@ def get_cached_stream_url(file_id):
 def root():
     return {
         "status": "ok",
-        "version": "FINAL STREMIO SAFE"
+        "version": "FINAL WORKING TOKEN VERSION"
     }
 
 # -----------------------
@@ -122,7 +120,7 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "2.2.0",
+        "version": "2.3.0",
         "name": "Seedr.cc Personal Addon",
         "description": "Stable API Token version",
         "resources": ["stream", "catalog", "meta"],
@@ -162,8 +160,7 @@ def catalog():
     except Exception as e:
         print("CATALOG ERROR:", str(e))
 
-    # ALWAYS valid response for Stremio
-    return {"metas": metas}
+    return {"metas": metas}  # ✅ ALWAYS valid
 
 # -----------------------
 # Meta
@@ -210,8 +207,7 @@ def stream(type: str, id: str):
     except Exception as e:
         print("STREAM ERROR:", str(e))
 
-    # ALWAYS valid response
-    return {"streams": streams}
+    return {"streams": streams}  # ✅ ALWAYS valid
 
 # -----------------------
 # Debug

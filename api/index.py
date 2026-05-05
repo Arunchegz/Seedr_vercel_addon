@@ -62,11 +62,15 @@ def walk_files(folder_id=0):
 # -----------------------
 @app.get("/debug/test")
 def debug_test():
-    return get_folder(0)
-
-@app.get("/debug/files")
-def debug_files():
-    return list(walk_files())
+    try:
+        data = get_folder(0)
+        return data
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
 
 # -----------------------
 # Manifest

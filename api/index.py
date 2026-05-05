@@ -27,7 +27,7 @@ redis = Redis(
 )
 
 # -----------------------
-# Seedr API Client (DIRECT)
+# Seedr API Client
 # -----------------------
 class SeedrClient:
     def __init__(self, token):
@@ -82,7 +82,7 @@ def walk_files(client, folder_id=None):
         yield f
 
     for folder in contents.get("folders", []):
-        yield from walk_files(client, folder["id"])
+        yield from walk_files(client, folder.get("id"))
 
 def extract_title_year(filename):
     year_match = re.search(r"(19|20)\d{2}", filename)
@@ -98,13 +98,14 @@ def extract_title_year(filename):
 # Cache
 # -----------------------
 def get_cached_stream_url(client, file):
-    key = f"seedr:stream:{file['id']}"
+    file_id = file.get("id") or file.get("folder_file_id")
+    key = f"seedr:stream:{file_id}"
 
     cached = redis.get(key)
     if cached:
         return json.loads(cached)["url"]
 
-    result = client.fetch_file(file["id"])
+    result = client.fetch_file(file_id)
     url = result.get("url")
 
     redis.set(key, json.dumps({"url": url}), ex=86400)
@@ -124,9 +125,9 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "name": "Seedr Personal Addon",
-        "description": "Stream Seedr files",
+        "description": "Stream Seedr files in Stremio",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -144,23 +145,38 @@ def manifest():
 @app.get("/catalog/movie/seedr.json")
 def catalog():
     metas = []
-
     client = get_client()
 
-    for f in walk_files(client):
-        if not f.get("play_video"):
-            continue
+    try:
+        data = client.list_contents()
+        print("Seedr response:", data)
 
-        title, year = extract_title_year(f["name"])
-        meta_id = normalize(title + year)
+        for f in walk_files(client):
+            print("FILE:", f)
 
-        metas.append({
-            "id": meta_id,
-            "type": "movie",
-            "name": title or f["name"],
-            "year": year,
-            "poster": None
-        })
+            name = f.get("name")
+            if not name:
+                continue
+
+            # fallback: assume video if extension matches
+            if not f.get("play_video", True):
+                if not re.search(r"\.(mkv|mp4|avi|mov|webm|wmv)$", name, re.I):
+                    continue
+
+            title, year = extract_title_year(name)
+            meta_id = normalize(title + year)
+
+            metas.append({
+                "id": meta_id,
+                "type": "movie",
+                "name": title or name,
+                "year": year,
+                "poster": None
+            })
+
+    except Exception as e:
+        print("ERROR:", str(e))
+        return {"metas": [], "error": str(e)}
 
     return {"metas": metas}
 
@@ -182,39 +198,44 @@ def stream(type: str, id: str):
             norm_title = normalize(title)
 
             for f in walk_files(client):
-                if not f.get("play_video"):
+                name = f.get("name", "")
+                if not name:
                     continue
 
-                fname_norm = normalize(f["name"])
+                fname_norm = normalize(name)
 
-                if norm_title in fname_norm and year in f["name"]:
+                if norm_title in fname_norm and year in name:
                     url = get_cached_stream_url(client, f)
                     streams.append({
                         "name": "Seedr",
-                        "title": f["name"],
-                        "url": url
+                        "title": name,
+                        "url": url,
+                        "behaviorHints": {"notWebReady": False}
                     })
 
         else:
             id_norm = normalize(id)
 
             for f in walk_files(client):
-                if not f.get("play_video"):
+                name = f.get("name", "")
+                if not name:
                     continue
 
-                fname_norm = normalize(f["name"])
-                title, year = extract_title_year(f["name"])
+                fname_norm = normalize(name)
+                title, year = extract_title_year(name)
                 file_id = normalize(title + year)
 
                 if file_id == id or id_norm in fname_norm:
                     url = get_cached_stream_url(client, f)
                     streams.append({
                         "name": "Seedr",
-                        "title": f["name"],
-                        "url": url
+                        "title": name,
+                        "url": url,
+                        "behaviorHints": {"notWebReady": False}
                     })
 
     except Exception as e:
+        print("STREAM ERROR:", str(e))
         return {"streams": [], "error": str(e)}
 
     return {"streams": streams}
@@ -226,3 +247,8 @@ def stream(type: str, id: str):
 def debug_files():
     client = get_client()
     return list(walk_files(client))
+
+@app.get("/debug/cache")
+def debug_cache():
+    keys = redis.keys("seedr:stream:*")
+    return {"total": len(keys), "keys": keys}

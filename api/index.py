@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from seedrcc import Seedr
 from upstash_redis import Redis
 import os
 import re
@@ -10,7 +9,7 @@ import json
 app = FastAPI()
 
 # -----------------------
-# CORS (Stremio friendly)
+# CORS
 # -----------------------
 app.add_middleware(
     CORSMiddleware,
@@ -20,7 +19,7 @@ app.add_middleware(
 )
 
 # -----------------------
-# Upstash Redis
+# Redis
 # -----------------------
 redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
@@ -28,38 +27,64 @@ redis = Redis(
 )
 
 # -----------------------
-# Seedr Client (FIXED)
+# Seedr API Client (DIRECT)
 # -----------------------
+class SeedrClient:
+    def __init__(self, token):
+        self.token = token
+        self.base = "https://www.seedr.cc/api/v0.1"
+
+    def headers(self):
+        return {
+            "Authorization": f"Bearer {self.token}"
+        }
+
+    def list_contents(self, folder_id=None):
+        url = f"{self.base}/folder"
+        params = {}
+        if folder_id:
+            params["folder_id"] = folder_id
+
+        res = requests.get(url, headers=self.headers(), params=params)
+        res.raise_for_status()
+        return res.json()
+
+    def fetch_file(self, file_id):
+        url = f"{self.base}/file/{file_id}"
+        res = requests.get(url, headers=self.headers())
+        res.raise_for_status()
+        return res.json()
+
+
 def get_client():
-    access_token = os.environ.get("SEEDR_ACCESS_TOKEN")
-    if not access_token:
+    token = os.environ.get("SEEDR_ACCESS_TOKEN")
+    if not token:
         raise Exception("SEEDR_ACCESS_TOKEN missing")
-    return Seedr(access_token=access_token)
+    return SeedrClient(token)
 
 # -----------------------
 # Helpers
 # -----------------------
-def normalize(text: str):
+def normalize(text):
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
-def get_movie_title(imdb_id: str):
+def get_movie_title(imdb_id):
     url = f"https://v3-cinemeta.strem.io/meta/movie/{imdb_id}.json"
     r = requests.get(url, timeout=10)
     r.raise_for_status()
-    data = r.json()
-    meta = data.get("meta", {})
+    meta = r.json().get("meta", {})
     return meta.get("name", ""), str(meta.get("year", ""))
 
 def walk_files(client, folder_id=None):
-    contents = client.list_contents(folder_id=folder_id)
+    contents = client.list_contents(folder_id)
 
-    for f in contents.files:
+    for f in contents.get("files", []):
         yield f
 
-    for folder in contents.folders:
-        yield from walk_files(client, folder.id)
+    for folder in contents.get("folders", []):
+        yield from walk_files(client, folder["id"])
 
-def extract_title_year(filename: str):
+def extract_title_year(filename):
     year_match = re.search(r"(19|20)\d{2}", filename)
     year = year_match.group(0) if year_match else ""
 
@@ -70,35 +95,27 @@ def extract_title_year(filename: str):
     return title, year
 
 # -----------------------
-# KV Cache (24h)
+# Cache
 # -----------------------
 def get_cached_stream_url(client, file):
-    key = f"seedr:stream:{file.folder_file_id}"
+    key = f"seedr:stream:{file['id']}"
 
     cached = redis.get(key)
     if cached:
-        cached = json.loads(cached)
-        print("KV HIT:", key)
-        return cached["url"]
+        return json.loads(cached)["url"]
 
-    print("KV MISS:", key)
+    result = client.fetch_file(file["id"])
+    url = result.get("url")
 
-    result = client.fetch_file(file.folder_file_id)
-
-    data = {"url": result.url}
-    redis.set(key, json.dumps(data), ex=86400)
-
-    return result.url
+    redis.set(key, json.dumps({"url": url}), ex=86400)
+    return url
 
 # -----------------------
 # Root
 # -----------------------
 @app.get("/")
 def root():
-    return {
-        "status": "ok",
-        "message": "Seedr Addon running (PAT auth + KV cache)"
-    }
+    return {"status": "ok"}
 
 # -----------------------
 # Manifest
@@ -107,9 +124,9 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "2.0.0",
-        "name": "Seedr.cc Personal Addon",
-        "description": "Stream your Seedr files in Stremio",
+        "version": "3.0.0",
+        "name": "Seedr Personal Addon",
+        "description": "Stream Seedr files",
         "resources": ["stream", "catalog", "meta"],
         "types": ["movie"],
         "catalogs": [
@@ -128,93 +145,84 @@ def manifest():
 def catalog():
     metas = []
 
-    with get_client() as client:
-        for f in walk_files(client):
-            if not f.play_video:
-                continue
+    client = get_client()
 
-            title, year = extract_title_year(f.name)
-            meta_id = normalize(title + year)
+    for f in walk_files(client):
+        if not f.get("play_video"):
+            continue
 
-            metas.append({
-                "id": meta_id,
-                "type": "movie",
-                "name": title or f.name,
-                "year": year,
-                "poster": None,
-                "description": "From your Seedr account"
-            })
+        title, year = extract_title_year(f["name"])
+        meta_id = normalize(title + year)
+
+        metas.append({
+            "id": meta_id,
+            "type": "movie",
+            "name": title or f["name"],
+            "year": year,
+            "poster": None
+        })
 
     return {"metas": metas}
-
-# -----------------------
-# Meta
-# -----------------------
-@app.get("/meta/movie/{id}.json")
-def meta(id: str):
-    return {
-        "meta": {
-            "id": id,
-            "type": "movie",
-            "name": id
-        }
-    }
 
 # -----------------------
 # Stream
 # -----------------------
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
-    streams = []
-
     if type != "movie":
         return {"streams": []}
 
+    client = get_client()
+    streams = []
+
     try:
-        with get_client() as client:
+        # IMDb match
+        if id.startswith("tt"):
+            title, year = get_movie_title(id)
+            norm_title = normalize(title)
 
-            # IMDb match
-            if id.startswith("tt"):
-                movie_title, movie_year = get_movie_title(id)
-                norm_title = normalize(movie_title)
+            for f in walk_files(client):
+                if not f.get("play_video"):
+                    continue
 
-                for file in walk_files(client):
-                    if not file.play_video:
-                        continue
+                fname_norm = normalize(f["name"])
 
-                    fname_norm = normalize(file.name)
+                if norm_title in fname_norm and year in f["name"]:
+                    url = get_cached_stream_url(client, f)
+                    streams.append({
+                        "name": "Seedr",
+                        "title": f["name"],
+                        "url": url
+                    })
 
-                    if norm_title in fname_norm and movie_year in file.name:
-                        url = get_cached_stream_url(client, file)
-                        streams.append({
-                            "name": "Seedr.cc",
-                            "title": file.name,
-                            "url": url,
-                            "behaviorHints": {"notWebReady": False}
-                        })
+        else:
+            id_norm = normalize(id)
 
-            # Filename match
-            else:
-                id_norm = normalize(id)
+            for f in walk_files(client):
+                if not f.get("play_video"):
+                    continue
 
-                for file in walk_files(client):
-                    if not file.play_video:
-                        continue
+                fname_norm = normalize(f["name"])
+                title, year = extract_title_year(f["name"])
+                file_id = normalize(title + year)
 
-                    fname_norm = normalize(file.name)
-                    title, year = extract_title_year(file.name)
-                    file_id = normalize(title + year)
-
-                    if file_id == id or fname_norm == id_norm or id_norm in fname_norm:
-                        url = get_cached_stream_url(client, file)
-                        streams.append({
-                            "name": "Seedr.cc",
-                            "title": file.name,
-                            "url": url,
-                            "behaviorHints": {"notWebReady": False}
-                        })
+                if file_id == id or id_norm in fname_norm:
+                    url = get_cached_stream_url(client, f)
+                    streams.append({
+                        "name": "Seedr",
+                        "title": f["name"],
+                        "url": url
+                    })
 
     except Exception as e:
         return {"streams": [], "error": str(e)}
 
     return {"streams": streams}
+
+# -----------------------
+# Debug
+# -----------------------
+@app.get("/debug/files")
+def debug_files():
+    client = get_client()
+    return list(walk_files(client))

@@ -1,5 +1,3 @@
 fastapi
-uvicorn
 requests
-seedrcc
 upstash-redis

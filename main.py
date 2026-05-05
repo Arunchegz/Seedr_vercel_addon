@@ -11,7 +11,6 @@ app = FastAPI()
 # -----------------------
 # CORS
 # -----------------------
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,7 +21,6 @@ app.add_middleware(
 # -----------------------
 # Upstash KV
 # -----------------------
-
 redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
     token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
@@ -31,7 +29,6 @@ redis = Redis(
 # -----------------------
 # Seedr API
 # -----------------------
-
 SEEDR_API = "https://www.seedr.cc/rest"
 
 def seedr_request(endpoint, params=None):
@@ -52,9 +49,23 @@ def seedr_request(endpoint, params=None):
 # -----------------------
 # Helpers
 # -----------------------
-
 def normalize(text):
     return re.sub(r"[^a-z0-9]", "", text.lower())
+
+def is_video(filename):
+    return any(filename.lower().endswith(ext) for ext in [
+        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".wmv"
+    ])
+
+def extract_title_year(filename):
+    year_match = re.search(r"(19|20)\d{2}", filename)
+    year = year_match.group(0) if year_match else ""
+
+    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)
+    title = re.sub(r"(19|20)\d{2}", "", title)
+    title = title.replace(".", " ").replace("_", " ").strip()
+
+    return title, year
 
 def walk_files(folder_id=None):
     params = {}
@@ -70,36 +81,26 @@ def walk_files(folder_id=None):
     for folder in data.get("folders", []):
         yield from walk_files(folder["id"])
 
-def extract_title_year(filename):
-    year_match = re.search(r"(19|20)\d{2}", filename)
-    year = year_match.group(0) if year_match else ""
-
-    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)
-    title = re.sub(r"(19|20)\d{2}", "", title)
-    title = title.replace(".", " ").replace("_", " ").strip()
-
-    return title, year
-
-def is_video(filename):
-    return any(filename.lower().endswith(ext) for ext in [
-        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".wmv"
-    ])
-
 # -----------------------
 # Cache
 # -----------------------
-
 def get_cached_stream_url(file_id):
     key = f"seedr:stream:{file_id}"
 
-    cached = redis.get(key)
-    if cached:
-        return json.loads(cached)["url"]
+    try:
+        cached = redis.get(key)
+        if cached:
+            return json.loads(cached)["url"]
+    except:
+        pass
 
     data = seedr_request("file", {"file_id": file_id})
     url = data.get("url")
 
-    redis.set(key, json.dumps({"url": url}), ex=86400)
+    try:
+        redis.set(key, json.dumps({"url": url}), ex=86400)
+    except:
+        pass
 
     return url
 
@@ -111,18 +112,17 @@ def get_cached_stream_url(file_id):
 def root():
     return {
         "status": "ok",
-        "version": "FINAL API TOKEN VERSION"
+        "version": "FINAL STREMIO SAFE"
     }
 
 # -----------------------
 # Manifest
 # -----------------------
-
 @app.get("/manifest.json")
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "name": "Seedr.cc Personal Addon",
         "description": "Stable API Token version",
         "resources": ["stream", "catalog", "meta"],
@@ -139,7 +139,6 @@ def manifest():
 # -----------------------
 # Catalog
 # -----------------------
-
 @app.get("/catalog/movie/seedr.json")
 def catalog():
     metas = []
@@ -161,14 +160,14 @@ def catalog():
             })
 
     except Exception as e:
-        return {"error": str(e)}
+        print("CATALOG ERROR:", str(e))
 
+    # ALWAYS valid response for Stremio
     return {"metas": metas}
 
 # -----------------------
 # Meta
 # -----------------------
-
 @app.get("/meta/movie/{id}.json")
 def meta(id: str):
     return {
@@ -182,7 +181,6 @@ def meta(id: str):
 # -----------------------
 # Stream
 # -----------------------
-
 @app.get("/stream/{type}/{id}.json")
 def stream(type: str, id: str):
     streams = []
@@ -210,14 +208,14 @@ def stream(type: str, id: str):
                 })
 
     except Exception as e:
-        return {"streams": [], "error": str(e)}
+        print("STREAM ERROR:", str(e))
 
+    # ALWAYS valid response
     return {"streams": streams}
 
 # -----------------------
 # Debug
 # -----------------------
-
 @app.get("/debug")
 def debug():
     try:

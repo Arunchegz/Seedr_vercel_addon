@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # -----------------------
-# Redis
+# Redis (optional)
 # -----------------------
 redis = Redis(
     url=os.environ.get("UPSTASH_KV_REST_API_URL"),
@@ -27,7 +27,7 @@ redis = Redis(
 )
 
 # -----------------------
-# Seedr Client
+# Seedr Client (ONLY THIS)
 # -----------------------
 class SeedrClient:
     def __init__(self, token):
@@ -61,7 +61,7 @@ class SeedrClient:
 def get_client():
     token = os.environ.get("SEEDR_ACCESS_TOKEN")
     if not token:
-        raise Exception("SEEDR_ACCESS_TOKEN missing")
+        raise Exception("Missing SEEDR_ACCESS_TOKEN")
     return SeedrClient(token)
 
 # -----------------------
@@ -115,32 +115,37 @@ def root():
     return {"status": "ok"}
 
 # -----------------------
-# Debug: Test Seedr auth
+# Debug: Check token
 # -----------------------
 @app.get("/debug/test-seedr")
 def test_seedr():
     token = os.environ.get("SEEDR_ACCESS_TOKEN")
 
     if not token:
-        return {"error": "Missing SEEDR_ACCESS_TOKEN"}
+        return {"error": "Missing token"}
 
     try:
         res = requests.get(
             "https://www.seedr.cc/api/v0.1/p/user",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Mozilla/5.0"
-            },
+            headers={"Authorization": f"Bearer {token}"},
             timeout=10
         )
 
         return {
-            "status_code": res.status_code,
-            "response": res.json()
+            "status": res.status_code,
+            "data": res.json()
         }
 
     except Exception as e:
         return {"error": str(e)}
+
+# -----------------------
+# Debug: List files
+# -----------------------
+@app.get("/debug/files")
+def debug_files():
+    client = get_client()
+    return list(walk_files(client))
 
 # -----------------------
 # Manifest
@@ -149,9 +154,9 @@ def test_seedr():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "5.1.0",
+        "version": "6.0.0",
         "name": "Seedr Personal Addon",
-        "description": "Stream Seedr files in Stremio",
+        "description": "Stream Seedr files",
         "resources": ["stream", "catalog"],
         "types": ["movie"],
         "catalogs": [
@@ -211,27 +216,16 @@ def stream(type: str, id: str):
             if not name:
                 continue
 
-            fname_norm = normalize(name)
-
-            if id_norm in fname_norm:
+            if id_norm in normalize(name):
                 url = get_cached_stream_url(client, f)
 
                 streams.append({
                     "name": "Seedr",
                     "title": name,
-                    "url": url,
-                    "behaviorHints": {"notWebReady": False}
+                    "url": url
                 })
 
     except Exception as e:
         return {"streams": [], "error": str(e)}
 
     return {"streams": streams}
-
-# -----------------------
-# Debug: List files
-# -----------------------
-@app.get("/debug/files")
-def debug_files():
-    client = get_client()
-    return list(walk_files(client))

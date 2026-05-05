@@ -13,32 +13,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE = "https://www.seedr.cc/api/v0.1/p"
+BASE = "https://www.seedr.cc/api/v0.1/p/resource.php"
 
 # -----------------------
 # Auth
 # -----------------------
-def get_headers():
+def get_token():
     token = os.environ.get("SEEDR_ACCESS_TOKEN")
     if not token:
         raise Exception("Missing SEEDR_ACCESS_TOKEN")
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json"
-    }
+    return token
 
 # -----------------------
-# Seedr API
+# Seedr API (WORKING)
 # -----------------------
-def get_folder(folder_id=0):
-    url = f"{BASE}/fs/folder/{folder_id}/items"
-    res = requests.get(url, headers=get_headers(), timeout=15)
+def list_contents(folder_id=None):
+    data = {
+        "access_token": get_token(),
+        "func": "list_contents"
+    }
+    if folder_id:
+        data["folder_id"] = folder_id
+
+    res = requests.post(BASE, data=data, timeout=15)
     res.raise_for_status()
     return res.json()
 
-def get_file(file_id):
-    url = f"{BASE}/fs/file/{file_id}"
-    res = requests.get(url, headers=get_headers(), timeout=15)
+def fetch_file(file_id):
+    res = requests.post(
+        BASE,
+        data={
+            "access_token": get_token(),
+            "func": "fetch_file",
+            "folder_file_id": file_id
+        },
+        timeout=15
+    )
     res.raise_for_status()
     return res.json()
 
@@ -48,14 +58,14 @@ def get_file(file_id):
 def normalize(text):
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
-def walk_files(folder_id=0):
-    data = get_folder(folder_id)
+def walk_files(folder_id=None):
+    data = list_contents(folder_id)
 
-    for item in data.get("items", []):
-        if item.get("type") == "file":
-            yield item
-        elif item.get("type") == "folder":
-            yield from walk_files(item.get("id"))
+    for f in data.get("files", []):
+        yield f
+
+    for folder in data.get("folders", []):
+        yield from walk_files(folder.get("id"))
 
 # -----------------------
 # Debug
@@ -63,14 +73,16 @@ def walk_files(folder_id=0):
 @app.get("/debug/test")
 def debug_test():
     try:
-        data = get_folder(0)
-        return data
+        return list_contents()
     except Exception as e:
-        import traceback
-        return {
-            "error": str(e),
-            "trace": traceback.format_exc()
-        }
+        return {"error": str(e)}
+
+@app.get("/debug/files")
+def debug_files():
+    try:
+        return list(walk_files())
+    except Exception as e:
+        return {"error": str(e)}
 
 # -----------------------
 # Manifest
@@ -79,7 +91,7 @@ def debug_test():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "12.0.0",
+        "version": "13.0.0",
         "name": "Seedr Addon",
         "resources": ["stream", "catalog"],
         "types": ["movie"],
@@ -95,16 +107,22 @@ def manifest():
 def catalog():
     metas = []
 
-    for f in walk_files():
-        name = f.get("name")
-        if not name:
-            continue
+    try:
+        for f in walk_files():
+            name = f.get("name")
+            file_id = f.get("folder_file_id")
 
-        metas.append({
-            "id": normalize(name),
-            "type": "movie",
-            "name": name
-        })
+            if not name:
+                continue
+
+            metas.append({
+                "id": normalize(name),
+                "type": "movie",
+                "name": name
+            })
+
+    except Exception as e:
+        return {"metas": [], "error": str(e)}
 
     return {"metas": metas}
 
@@ -115,23 +133,26 @@ def catalog():
 def stream(type: str, id: str):
     streams = []
 
-    for f in walk_files():
-        name = f.get("name")
-        file_id = f.get("id")
+    try:
+        for f in walk_files():
+            name = f.get("name")
+            file_id = f.get("folder_file_id")
 
-        if not name:
-            continue
+            if not name or not file_id:
+                continue
 
-        if normalize(id) in normalize(name):
-            file_info = get_file(file_id)
+            if normalize(id) in normalize(name):
+                file_data = fetch_file(file_id)
+                url = file_data.get("url")
 
-            url = file_info.get("url") or file_info.get("stream_url")
+                if url:
+                    streams.append({
+                        "name": "Seedr",
+                        "title": name,
+                        "url": url
+                    })
 
-            if url:
-                streams.append({
-                    "name": "Seedr",
-                    "title": name,
-                    "url": url
-                })
+    except Exception as e:
+        return {"streams": [], "error": str(e)}
 
     return {"streams": streams}

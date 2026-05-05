@@ -1,10 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from upstash_redis import Redis
 import os
 import re
 import requests
-import json
 
 app = FastAPI()
 
@@ -19,41 +17,28 @@ app.add_middleware(
 )
 
 # -----------------------
-# Redis (optional)
-# -----------------------
-redis = Redis(
-    url=os.environ.get("UPSTASH_KV_REST_API_URL"),
-    token=os.environ.get("UPSTASH_KV_REST_API_TOKEN"),
-)
-
-# -----------------------
-# Seedr Client (ONLY THIS)
+# Seedr Client (OFFICIAL API)
 # -----------------------
 class SeedrClient:
     def __init__(self, token):
         self.token = token
-        self.url = "https://www.seedr.cc/api/v0.1/p/resource.php"
+        self.base = "https://www.seedr.cc/api/v0.1/p"
 
-    def list_contents(self, folder_id=None):
-        data = {
-            "access_token": self.token,
-            "func": "list_contents"
+    def headers(self):
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json"
         }
-        if folder_id:
-            data["folder_id"] = folder_id
 
-        res = requests.post(self.url, data=data, timeout=15)
+    def get_folder(self, folder_id=0):
+        url = f"{self.base}/fs/folder/{folder_id}/items"
+        res = requests.get(url, headers=self.headers(), timeout=10)
         res.raise_for_status()
         return res.json()
 
-    def fetch_file(self, file_id):
-        data = {
-            "access_token": self.token,
-            "func": "fetch_file",
-            "folder_file_id": file_id
-        }
-
-        res = requests.post(self.url, data=data, timeout=15)
+    def get_file(self, file_id):
+        url = f"{self.base}/fs/file/{file_id}"
+        res = requests.get(url, headers=self.headers(), timeout=10)
         res.raise_for_status()
         return res.json()
 
@@ -74,38 +59,20 @@ def extract_title_year(filename):
     year_match = re.search(r"(19|20)\d{2}", filename)
     year = year_match.group(0) if year_match else ""
 
-    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)
+    title = re.sub(r"\.(mkv|mp4|avi|mov|webm).*", "", filename, flags=re.I)
     title = re.sub(r"(19|20)\d{2}", "", title)
     title = title.replace(".", " ").replace("_", " ").strip()
 
     return title, year
 
-def walk_files(client, folder_id=None):
-    data = client.list_contents(folder_id)
+def walk_files(client, folder_id=0):
+    data = client.get_folder(folder_id)
 
     for f in data.get("files", []):
         yield f
 
     for folder in data.get("folders", []):
         yield from walk_files(client, folder.get("id"))
-
-# -----------------------
-# Cache
-# -----------------------
-def get_cached_stream_url(client, file):
-    file_id = file.get("folder_file_id")
-
-    key = f"seedr:stream:{file_id}"
-
-    cached = redis.get(key)
-    if cached:
-        return json.loads(cached)["url"]
-
-    result = client.fetch_file(file_id)
-    url = result.get("url")
-
-    redis.set(key, json.dumps({"url": url}), ex=86400)
-    return url
 
 # -----------------------
 # Root
@@ -115,33 +82,13 @@ def root():
     return {"status": "ok"}
 
 # -----------------------
-# Debug: Check token
+# Debug: check API
 # -----------------------
-@app.get("/debug/test-seedr")
-def test_seedr():
-    token = os.environ.get("SEEDR_ACCESS_TOKEN")
+@app.get("/debug/test")
+def test():
+    client = get_client()
+    return client.get_folder(0)
 
-    if not token:
-        return {"error": "Missing token"}
-
-    try:
-        res = requests.get(
-            "https://www.seedr.cc/api/v0.1/p/user",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10
-        )
-
-        return {
-            "status": res.status_code,
-            "data": res.json()
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
-
-# -----------------------
-# Debug: List files
-# -----------------------
 @app.get("/debug/files")
 def debug_files():
     client = get_client()
@@ -154,9 +101,9 @@ def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "6.0.0",
-        "name": "Seedr Personal Addon",
-        "description": "Stream Seedr files",
+        "version": "8.0.0",
+        "name": "Seedr Addon",
+        "description": "Stream Seedr files in Stremio",
         "resources": ["stream", "catalog"],
         "types": ["movie"],
         "catalogs": [
@@ -173,8 +120,8 @@ def manifest():
 # -----------------------
 @app.get("/catalog/movie/seedr.json")
 def catalog():
-    metas = []
     client = get_client()
+    metas = []
 
     try:
         for f in walk_files(client):
@@ -212,17 +159,17 @@ def stream(type: str, id: str):
         id_norm = normalize(id)
 
         for f in walk_files(client):
-            name = f.get("name", "")
-            if not name:
+            name = f.get("name")
+            file_id = f.get("id")
+
+            if not name or not file_id:
                 continue
 
             if id_norm in normalize(name):
-                url = get_cached_stream_url(client, f)
-
                 streams.append({
                     "name": "Seedr",
                     "title": name,
-                    "url": url
+                    "url": f"https://www.seedr.cc/api/v0.1/p/fs/file/{file_id}"
                 })
 
     except Exception as e:

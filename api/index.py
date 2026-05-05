@@ -27,39 +27,33 @@ redis = Redis(
 )
 
 # -----------------------
-# Seedr Client (WORKING)
+# Seedr Client (FINAL FIX)
 # -----------------------
 class SeedrClient:
     def __init__(self, token):
         self.token = token
-        self.base = "https://www.seedr.cc/api/v0.1"
+        self.url = "https://www.seedr.cc/api/v0.1/p/resource.php"
 
     def list_contents(self, folder_id=None):
-        url = f"{self.base}/p/resource.php"
-        params = {
+        data = {
+            "access_token": self.token,
             "func": "list_contents"
         }
         if folder_id:
-            params["folder_id"] = folder_id
+            data["folder_id"] = folder_id
 
-        res = requests.post(url, params=params, data={
-            "access_token": self.token
-        })
-
+        res = requests.post(self.url, data=data)
         res.raise_for_status()
         return res.json()
 
     def fetch_file(self, file_id):
-        url = f"{self.base}/p/resource.php"
-        params = {
-            "func": "fetch_file"
+        data = {
+            "access_token": self.token,
+            "func": "fetch_file",
+            "folder_file_id": file_id
         }
 
-        res = requests.post(url, params=params, data={
-            "access_token": self.token,
-            "folder_file_id": file_id
-        })
-
+        res = requests.post(self.url, data=data)
         res.raise_for_status()
         return res.json()
 
@@ -108,7 +102,6 @@ def get_cached_stream_url(client, file):
         return json.loads(cached)["url"]
 
     result = client.fetch_file(file_id)
-
     url = result.get("url")
 
     redis.set(key, json.dumps({"url": url}), ex=86400)
@@ -128,7 +121,7 @@ def root():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "name": "Seedr Personal Addon",
         "description": "Stream Seedr files in Stremio",
         "resources": ["stream", "catalog"],

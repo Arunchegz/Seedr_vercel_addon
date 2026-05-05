@@ -27,7 +27,7 @@ redis = Redis(
 )
 
 # -----------------------
-# Seedr Client (FINAL FIX)
+# Seedr Client
 # -----------------------
 class SeedrClient:
     def __init__(self, token):
@@ -42,7 +42,7 @@ class SeedrClient:
         if folder_id:
             data["folder_id"] = folder_id
 
-        res = requests.post(self.url, data=data)
+        res = requests.post(self.url, data=data, timeout=15)
         res.raise_for_status()
         return res.json()
 
@@ -53,7 +53,7 @@ class SeedrClient:
             "folder_file_id": file_id
         }
 
-        res = requests.post(self.url, data=data)
+        res = requests.post(self.url, data=data, timeout=15)
         res.raise_for_status()
         return res.json()
 
@@ -115,13 +115,41 @@ def root():
     return {"status": "ok"}
 
 # -----------------------
+# Debug: Test Seedr auth
+# -----------------------
+@app.get("/debug/test-seedr")
+def test_seedr():
+    token = os.environ.get("SEEDR_ACCESS_TOKEN")
+
+    if not token:
+        return {"error": "Missing SEEDR_ACCESS_TOKEN"}
+
+    try:
+        res = requests.get(
+            "https://www.seedr.cc/api/v0.1/p/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout=10
+        )
+
+        return {
+            "status_code": res.status_code,
+            "response": res.json()
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+# -----------------------
 # Manifest
 # -----------------------
 @app.get("/manifest.json")
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "5.0.0",
+        "version": "5.1.0",
         "name": "Seedr Personal Addon",
         "description": "Stream Seedr files in Stremio",
         "resources": ["stream", "catalog"],
@@ -201,7 +229,7 @@ def stream(type: str, id: str):
     return {"streams": streams}
 
 # -----------------------
-# Debug
+# Debug: List files
 # -----------------------
 @app.get("/debug/files")
 def debug_files():

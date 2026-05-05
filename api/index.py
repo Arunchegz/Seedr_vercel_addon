@@ -32,7 +32,7 @@ redis = Redis(
 class SeedrClient:
     def __init__(self, token):
         self.token = token
-        self.base = "https://www.seedr.cc/api/v0.1"
+        self.base = "https://www.seedr.cc/api/v0.1/p"
 
     def headers(self):
         return {
@@ -46,6 +46,12 @@ class SeedrClient:
             params["folder_id"] = folder_id
 
         res = requests.get(url, headers=self.headers(), params=params)
+        res.raise_for_status()
+        return res.json()
+
+    def fetch_file(self, file_id):
+        url = f"{self.base}/file/{file_id}"
+        res = requests.get(url, headers=self.headers())
         res.raise_for_status()
         return res.json()
 

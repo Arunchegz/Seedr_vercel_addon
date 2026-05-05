@@ -1,68 +1,207 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import re
 import requests
 
-TOKEN = "YOUR_SEEDR_ACCESS_TOKEN"
-
-BASE_URL = "https://www.seedr.cc/api/v0.1/p"
-
-headers = {
-    "Authorization": f"Bearer {TOKEN}",
-    "Accept": "application/json"
-}
+app = FastAPI()
 
 # -----------------------
-# Get user profile
+# CORS
 # -----------------------
-def get_user():
-    url = f"{BASE_URL}/user"
-    res = requests.get(url, headers=headers)
-    print("User:", res.status_code)
-    print(res.json())
-
-
-# -----------------------
-# List files in root folder
-# -----------------------
-def list_files(folder_id=0):
-    url = f"{BASE_URL}/fs/folder/{folder_id}/items"
-    res = requests.get(url, headers=headers)
-    res.raise_for_status()
-
-    data = res.json()
-
-    print("\nFolders:")
-    for f in data.get("folders", []):
-        print(f"📁 {f['name']} (ID: {f['id']})")
-
-    print("\nFiles:")
-    for f in data.get("files", []):
-        print(f"🎬 {f['name']} (ID: {f['id']})")
-
-    return data
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------
-# Get file stream URL
+# Seedr Client (OFFICIAL /fs API)
 # -----------------------
-def get_stream(file_id):
-    url = f"{BASE_URL}/fs/file/{file_id}"
-    res = requests.get(url, headers=headers)
-    res.raise_for_status()
+class SeedrClient:
+    def __init__(self, token: str):
+        self.token = token
+        self.base = "https://www.seedr.cc/api/v0.1/p"
 
-    data = res.json()
+    def headers(self):
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+            "User-Agent": "seedr-stremio-addon/1.0"
+        }
 
-    print("\nStream URL:")
-    print(data.get("url"))
+    def get_folder_items(self, folder_id: int = 0):
+        url = f"{self.base}/fs/folder/{folder_id}/items"
+        res = requests.get(url, headers=self.headers(), timeout=15)
+        res.raise_for_status()
+        return res.json()
 
+    def get_file(self, file_id: int):
+        # Returns metadata including a direct/streamable URL
+        url = f"{self.base}/fs/file/{file_id}"
+        res = requests.get(url, headers=self.headers(), timeout=15)
+        res.raise_for_status()
+        return res.json()
+
+
+def get_client() -> SeedrClient:
+    token = os.environ.get("SEEDR_ACCESS_TOKEN")
+    if not token:
+        raise Exception("Missing SEEDR_ACCESS_TOKEN")
+    return SeedrClient(token)
 
 # -----------------------
-# Run
+# Helpers
 # -----------------------
-if __name__ == "__main__":
-    get_user()
+def normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
-    data = list_files()
+def extract_title_year(filename: str):
+    year_match = re.search(r"(19|20)\d{2}", filename)
+    year = year_match.group(0) if year_match else ""
 
-    # take first file
-    if data.get("files"):
-        first_file_id = data["files"][0]["id"]
-        get_stream(first_file_id)
+    title = re.sub(r"\.(mkv|mp4|avi|mov|webm|wmv).*", "", filename, flags=re.I)
+    title = re.sub(r"(19|20)\d{2}", "", title)
+    title = title.replace(".", " ").replace("_", " ").strip()
+
+    return title or filename, year
+
+def walk_files(client: SeedrClient, folder_id: int = 0):
+    """
+    Recursively yield all file items.
+    NOTE: /fs/folder/{id}/items returns { items: [ {id, name, type}, ... ] }
+    """
+    data = client.get_folder_items(folder_id)
+
+    for item in data.get("items", []):
+        t = item.get("type")
+        if t == "file":
+            yield item
+        elif t == "folder":
+            # recurse
+            yield from walk_files(client, item.get("id"))
+
+def get_stream_url(client: SeedrClient, file_id: int) -> str:
+    """
+    Resolve a playable URL from file metadata.
+    Seedr returns a 'url' (or sometimes nested fields depending on account/file).
+    """
+    info = client.get_file(file_id)
+
+    # Common keys seen:
+    # - 'url'
+    # - 'stream_url'
+    # - 'download_url'
+    for k in ("url", "stream_url", "download_url"):
+        if info.get(k):
+            return info[k]
+
+    # Fallback: return empty string if nothing found
+    return ""
+
+# -----------------------
+# Routes
+# -----------------------
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+# ---- Debug ----
+@app.get("/debug/test")
+def debug_test():
+    try:
+        client = get_client()
+        return client.get_folder_items(0)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/debug/files")
+def debug_files():
+    try:
+        client = get_client()
+        return list(walk_files(client))
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---- Manifest ----
+@app.get("/manifest.json")
+def manifest():
+    return {
+        "id": "org.seedrcc.stremio",
+        "version": "9.0.0",
+        "name": "Seedr Addon",
+        "description": "Stream Seedr files in Stremio",
+        "resources": ["stream", "catalog"],
+        "types": ["movie"],
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "seedr",
+                "name": "My Seedr Files"
+            }
+        ]
+    }
+
+# ---- Catalog ----
+@app.get("/catalog/movie/seedr.json")
+def catalog():
+    client = get_client()
+    metas = []
+
+    try:
+        for f in walk_files(client):
+            name = f.get("name")
+            if not name:
+                continue
+
+            title, year = extract_title_year(name)
+            meta_id = normalize(title + year)
+
+            metas.append({
+                "id": meta_id,
+                "type": "movie",
+                "name": title,
+                "year": year
+            })
+
+    except Exception as e:
+        return {"metas": [], "error": str(e)}
+
+    return {"metas": metas}
+
+# ---- Stream ----
+@app.get("/stream/{type}/{id}.json")
+def stream(type: str, id: str):
+    if type != "movie":
+        return {"streams": []}
+
+    client = get_client()
+    streams = []
+
+    try:
+        id_norm = normalize(id)
+
+        for f in walk_files(client):
+            name = f.get("name")
+            file_id = f.get("id")
+
+            if not name or not file_id:
+                continue
+
+            if id_norm in normalize(name):
+                url = get_stream_url(client, file_id)
+                if not url:
+                    continue
+
+                streams.append({
+                    "name": "Seedr",
+                    "title": name,
+                    "url": url,
+                    "behaviorHints": {"notWebReady": False}
+                })
+
+    except Exception as e:
+        return {"streams": [], "error": str(e)}
+
+    return {"streams": streams}

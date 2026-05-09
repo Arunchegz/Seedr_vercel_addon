@@ -8,6 +8,10 @@ from seedr_api import SeedrClient
 
 app = FastAPI()
 
+# ---------------------------------------------------
+# CORS
+# ---------------------------------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,9 +43,11 @@ async def walk_folder(client, folder_id):
 
     files = []
 
+    # Files inside current folder
     for f in contents.files or []:
         files.append(f)
 
+    # Recurse into subfolders
     for folder in contents.folders or []:
         nested = await walk_folder(client, folder.id)
         files.extend(nested)
@@ -49,7 +55,7 @@ async def walk_folder(client, folder_id):
     return files
 
 # ---------------------------------------------------
-# Get all files
+# Get all files from Seedr
 # ---------------------------------------------------
 
 async def get_all_files():
@@ -66,7 +72,7 @@ async def get_all_files():
         for f in root.files or []:
             files.append(f)
 
-        # Recursive folders
+        # Walk all folders recursively
         for folder in root.folders or []:
             nested = await walk_folder(client, folder.id)
             files.extend(nested)
@@ -74,7 +80,7 @@ async def get_all_files():
         return files
 
 # ---------------------------------------------------
-# Debug
+# Debug endpoint
 # ---------------------------------------------------
 
 @app.get("/debug/files")
@@ -100,13 +106,12 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "16.0.0",
+        "version": "17.0.0",
         "name": "Seedr Addon",
-        "description": "Stream Seedr files in Stremio",
+        "description": "Stream your Seedr files in Stremio",
 
         "resources": [
             "catalog",
-            "meta",
             "stream"
         ],
 
@@ -120,11 +125,7 @@ def manifest():
                 "id": "seedr",
                 "name": "My Seedr Files"
             }
-        ],
-
-        "behaviorHints": {
-            "configurable": False
-        }
+        ]
     }
 
 # ---------------------------------------------------
@@ -140,7 +141,7 @@ async def catalog():
 
     for f in files:
 
-        if not f.name:
+        if not f.is_video:
             continue
 
         poster = None
@@ -154,56 +155,10 @@ async def catalog():
             "id": normalize(f.name),
             "type": "movie",
             "name": f.name,
-
             "poster": poster,
-            "posterShape": "landscape",
-
-            "description": f.name,
         })
 
     return {"metas": metas}
-
-# ---------------------------------------------------
-# Meta
-# ---------------------------------------------------
-
-@app.get("/meta/{type}/{id}.json")
-async def meta(type: str, id: str):
-
-    files = await get_all_files()
-
-    for f in files:
-
-        if normalize(id) == normalize(f.name):
-
-            poster = None
-
-            try:
-                poster = f.thumb
-            except:
-                pass
-
-            return {
-                "meta": {
-                    "id": normalize(f.name),
-                    "type": "movie",
-                    "name": f.name,
-
-                    "poster": poster,
-                    "posterShape": "landscape",
-
-                    "description": f.name,
-
-                    "videos": [
-                        {
-                            "id": normalize(f.name),
-                            "title": f.name
-                        }
-                    ]
-                }
-            }
-
-    return {"meta": {}}
 
 # ---------------------------------------------------
 # Stream
@@ -214,6 +169,9 @@ async def stream(type: str, id: str):
 
     streams = []
 
+    if type != "movie":
+        return {"streams": []}
+
     files = await get_all_files()
 
     for f in files:
@@ -223,23 +181,16 @@ async def stream(type: str, id: str):
 
         if normalize(id) == normalize(f.name):
 
-            hls_url = None
-
             try:
                 hls_url = f.presentation_urls.video["hls"]
-            except:
-                pass
-
-            if hls_url:
 
                 streams.append({
                     "name": "Seedr",
                     "title": f.name,
-                    "url": hls_url,
-
-                    "behaviorHints": {
-                        "notWebReady": False
-                    }
+                    "url": hls_url
                 })
+
+            except:
+                pass
 
     return {"streams": streams}

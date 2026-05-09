@@ -1,3 +1,3 @@
 fastapi
 uvicorn
-seedr-api-client
+seedrcc

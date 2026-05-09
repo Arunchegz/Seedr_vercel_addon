@@ -26,29 +26,30 @@ app.add_middleware(
 def normalize(text):
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
-def get_client():
+def get_token():
     token = os.environ.get("SEEDR_ACCESS_TOKEN")
 
     if not token:
         raise Exception("Missing SEEDR_ACCESS_TOKEN")
 
-    return SeedrClient(token=token)
+    return token
 
 # ---------------------------------------------------
 # Recursive folder walker
 # ---------------------------------------------------
 
-def walk_folder(client, folder_id):
-
-    contents = client.list_folder(folder_id)
+async def walk_folder(client, folder_id):
+    contents = await client.filesystem.list_folder_contents(folder_id)
 
     files = []
 
-    for f in contents.get("files", []):
+    # Files in current folder
+    for f in contents.files or []:
         files.append(f)
 
-    for folder in contents.get("folders", []):
-        nested = walk_folder(client, folder["id"])
+    # Recursive folders
+    for folder in contents.folders or []:
+        nested = await walk_folder(client, folder.id)
         files.extend(nested)
 
     return files
@@ -57,22 +58,45 @@ def walk_folder(client, folder_id):
 # Get all files
 # ---------------------------------------------------
 
-def get_all_files():
+async def get_all_files():
 
-    client = get_client()
+    token = get_token()
 
-    root = client.list_folder()
+    async with SeedrClient.from_token(token) as client:
 
-    files = []
+        root = await client.filesystem.list_root_contents()
 
-    for f in root.get("files", []):
-        files.append(f)
+        files = []
 
-    for folder in root.get("folders", []):
-        nested = walk_folder(client, folder["id"])
-        files.extend(nested)
+        # Root files
+        for f in root.files or []:
+            files.append(f)
 
-    return files
+        # Walk subfolders recursively
+        for folder in root.folders or []:
+            nested = await walk_folder(client, folder.id)
+            files.extend(nested)
+
+        return files
+
+# ---------------------------------------------------
+# Debug endpoint
+# ---------------------------------------------------
+
+@app.get("/debug/files")
+async def debug_files():
+
+    files = await get_all_files()
+
+    return [
+        {
+            "id": normalize(f.name),
+            "name": f.name,
+            "size": f.size,
+            "is_video": f.is_video,
+        }
+        for f in files
+    ]
 
 # ---------------------------------------------------
 # Manifest
@@ -80,12 +104,11 @@ def get_all_files():
 
 @app.get("/manifest.json")
 def manifest():
-
     return {
         "id": "org.seedrcc.stremio",
-        "version": "1.0.0",
+        "version": "19.0.0",
         "name": "Seedr Addon",
-        "description": "Seedr streaming addon",
+        "description": "Stream your Seedr files in Stremio",
 
         "resources": [
             "catalog",
@@ -111,25 +134,33 @@ def manifest():
 # ---------------------------------------------------
 
 @app.get("/catalog/movie/seedr.json")
-def catalog():
-
-    files = get_all_files()
+async def catalog():
 
     metas = []
 
+    files = await get_all_files()
+
     for f in files:
 
-        name = f.get("name", "")
-
-        if not name:
+        if not f.is_video:
             continue
 
+        poster = None
+
+        try:
+            poster = f.thumb
+        except:
+            pass
+
         metas.append({
-            "id": normalize(name),
+            "id": normalize(f.name),
             "type": "movie",
-            "name": name,
+            "name": f.name,
+
+            "poster": poster,
             "posterShape": "poster",
-            "description": name
+
+            "description": f.name,
         })
 
     return {"metas": metas}
@@ -139,30 +170,37 @@ def catalog():
 # ---------------------------------------------------
 
 @app.get("/meta/{type}/{id}.json")
-def meta(type: str, id: str):
+async def meta(type: str, id: str):
 
-    files = get_all_files()
+    files = await get_all_files()
 
     for f in files:
 
-        name = f.get("name", "")
+        if normalize(id) == normalize(f.name):
 
-        if normalize(name) == normalize(id):
+            poster = None
+
+            try:
+                poster = f.thumb
+            except:
+                pass
 
             return {
                 "meta": {
-                    "id": normalize(name),
+                    "id": normalize(f.name),
                     "type": "movie",
-                    "name": name,
+                    "name": f.name,
 
+                    "poster": poster,
                     "posterShape": "poster",
 
-                    "description": name,
+                    "description": f.name,
 
                     "videos": [
                         {
-                            "id": normalize(name),
-                            "title": name
+                            "id": normalize(f.name),
+                            "title": f.name,
+                            "released": "2026-01-01T00:00:00.000Z"
                         }
                     ]
                 }
@@ -175,31 +213,39 @@ def meta(type: str, id: str):
 # ---------------------------------------------------
 
 @app.get("/stream/{type}/{id}.json")
-def stream(type: str, id: str):
+async def stream(type: str, id: str):
+
+    streams = []
 
     if type != "movie":
         return {"streams": []}
 
-    files = get_all_files()
-
-    streams = []
+    files = await get_all_files()
 
     for f in files:
 
-        name = f.get("name", "")
-
-        if normalize(name) != normalize(id):
+        if not f.name:
             continue
 
-        url = f.get("url")
+        if normalize(id) == normalize(f.name):
 
-        if not url:
-            continue
+            try:
+                hls_url = f.presentation_urls.video["hls"]
 
-        streams.append({
-            "name": "Seedr",
-            "title": name,
-            "url": url
-        })
+                streams.append({
+                    "name": "Seedr",
+                    "title": f.name,
+                    "url": hls_url,
+
+                    # IMPORTANT:
+                    # Force external/native playback
+                    # instead of browser web player
+                    "behaviorHints": {
+                        "notWebReady": True
+                    }
+                })
+
+            except:
+                pass
 
     return {"streams": streams}

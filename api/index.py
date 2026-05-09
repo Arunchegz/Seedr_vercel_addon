@@ -275,42 +275,31 @@ async def stream(type: str, id: str):
 
             try:
 
-                # ---------------------------------------------------
-                # Direct MKV URL
-                # ---------------------------------------------------
+                original_hls = f.presentation_urls.video["hls"]
 
-                direct_url = build_direct_url(f)
+                qualities = [
+                    ("1080p", "master-1080.m3u8"),
+                    ("720p", "master-720.m3u8"),
+                    ("480p", "master-480.m3u8"),
+                ]
 
-                streams.append({
-                    "name": "Seedr Direct",
-                    "title": f.name,
-                    "url": direct_url,
+                for quality_name, quality_file in qualities:
 
-                    "behaviorHints": {
-                        "notWebReady": False
-                    }
-                })
+                    stream_url = re.sub(
+                        r"master-\d+\.m3u8",
+                        quality_file,
+                        original_hls
+                    )
 
-                # ---------------------------------------------------
-                # HLS 1080p fallback
-                # ---------------------------------------------------
+                    streams.append({
+                        "name": f"Seedr {quality_name}",
+                        "title": f.name,
+                        "url": stream_url,
 
-                hls_url = f.presentation_urls.video["hls"]
-
-                hls_url = hls_url.replace(
-                    "master-2160.m3u8",
-                    "master-1080.m3u8"
-                )
-
-                streams.append({
-                    "name": "Seedr HLS 1080p",
-                    "title": f.name,
-                    "url": hls_url,
-
-                    "behaviorHints": {
-                        "notWebReady": False
-                    }
-                })
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
 
             except Exception as e:
                 print(e)

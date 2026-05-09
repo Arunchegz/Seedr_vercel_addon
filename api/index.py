@@ -166,8 +166,9 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "27.0.0",
-        "name": "Seedr Addon",
+        "version": "28.0.0",
+        "name": "☁️ Seedr",
+
         "description": "Stream your Seedr files in Stremio",
 
         "resources": [
@@ -188,7 +189,7 @@ def manifest():
             {
                 "type": "movie",
                 "id": "seedr",
-                "name": "My Seedr Files"
+                "name": "☁️ My Seedr Files"
             }
         ]
     }
@@ -268,6 +269,60 @@ async def meta(type: str, id: str):
 
 
 # ---------------------------------------------------
+# Get Seedr direct URL
+# ---------------------------------------------------
+
+def get_seedr_download_url(file_id):
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Accept": "application/json"
+    }
+
+    response = requests.get(
+        f"https://www.seedr.cc/api/v0.1/p/download/file/{file_id}/url",
+        headers=headers,
+        timeout=15
+    )
+
+    print("DOWNLOAD STATUS:")
+    print(response.status_code)
+
+    print("DOWNLOAD RESPONSE:")
+    print(response.text)
+
+    data = response.json()
+
+    if not data.get("success"):
+        return None
+
+    return data.get("url")
+
+
+# ---------------------------------------------------
+# Detect quality
+# ---------------------------------------------------
+
+def detect_quality(filename):
+
+    filename_lower = filename.lower()
+
+    if "2160" in filename_lower or "4k" in filename_lower:
+        return "4K"
+
+    elif "1080" in filename_lower:
+        return "1080p"
+
+    elif "720" in filename_lower:
+        return "720p"
+
+    elif "480" in filename_lower:
+        return "480p"
+
+    return "Auto"
+
+
+# ---------------------------------------------------
 # Stream
 # ---------------------------------------------------
 
@@ -281,8 +336,10 @@ async def stream(type: str, id: str):
 
     try:
 
+        files = await get_all_files()
+
         # ---------------------------------------------------
-        # IMDb page support
+        # IMDb Movie Page Matching
         # ---------------------------------------------------
 
         if id.startswith("tt"):
@@ -293,8 +350,6 @@ async def stream(type: str, id: str):
             print("MOVIE YEAR:", movie_year)
 
             target_title = normalize(movie_title)
-
-            files = await get_all_files()
 
             for f in files:
 
@@ -309,7 +364,7 @@ async def stream(type: str, id: str):
                 if target_title not in normalized_file_title:
                     continue
 
-                # Match year if available
+                # Match year
                 if movie_year and parsed_year:
                     if movie_year != parsed_year:
                         continue
@@ -318,49 +373,21 @@ async def stream(type: str, id: str):
 
                 try:
 
-                    headers = {
-                        "Authorization": f"Bearer {ACCESS_TOKEN}",
-                        "Accept": "application/json"
-                    }
-
-                    response = requests.get(
-                        f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
-                        headers=headers,
-                        timeout=15
-                    )
-
-                    data = response.json()
-
-                    print("DOWNLOAD RESPONSE:")
-                    print(data)
-
-                    if not data.get("success"):
-                        continue
-
-                    direct_url = data.get("url")
+                    direct_url = get_seedr_download_url(f.id)
 
                     if not direct_url:
                         continue
 
-                    quality = "Auto"
-
-                    filename_lower = f.name.lower()
-
-                    if "2160" in filename_lower or "4k" in filename_lower:
-                        quality = "4K"
-
-                    elif "1080" in filename_lower:
-                        quality = "1080p"
-
-                    elif "720" in filename_lower:
-                        quality = "720p"
-
-                    elif "480" in filename_lower:
-                        quality = "480p"
+                    quality = detect_quality(f.name)
 
                     streams.append({
-                        "name": f"Seedr {quality}",
-                        "title": f.name,
+                        "name": "☁️ Seedr",
+
+                        "title": (
+                            f"⚡ {quality}\n"
+                            f"📁 {f.name}"
+                        ),
+
                         "url": direct_url,
 
                         "behaviorHints": {
@@ -373,12 +400,10 @@ async def stream(type: str, id: str):
                     print(e)
 
         # ---------------------------------------------------
-        # Catalog page support
+        # Personal Catalog Matching
         # ---------------------------------------------------
 
         else:
-
-            files = await get_all_files()
 
             for f in files:
 
@@ -390,33 +415,21 @@ async def stream(type: str, id: str):
 
                 try:
 
-                    headers = {
-                        "Authorization": f"Bearer {ACCESS_TOKEN}",
-                        "Accept": "application/json"
-                    }
-
-                    response = requests.get(
-                        f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
-                        headers=headers,
-                        timeout=15
-                    )
-
-                    data = response.json()
-
-                    print("DOWNLOAD RESPONSE:")
-                    print(data)
-
-                    if not data.get("success"):
-                        continue
-
-                    direct_url = data.get("url")
+                    direct_url = get_seedr_download_url(f.id)
 
                     if not direct_url:
                         continue
 
+                    quality = detect_quality(f.name)
+
                     streams.append({
-                        "name": "Seedr",
-                        "title": f.name,
+                        "name": "☁️ Seedr",
+
+                        "title": (
+                            f"⚡ {quality}\n"
+                            f"📁 {f.name}"
+                        ),
+
                         "url": direct_url,
 
                         "behaviorHints": {
@@ -432,5 +445,7 @@ async def stream(type: str, id: str):
 
         print("MAIN STREAM ERROR:")
         print(e)
+
+    print("TOTAL STREAMS:", len(streams))
 
     return {"streams": streams}

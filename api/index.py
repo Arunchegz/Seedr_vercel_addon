@@ -75,7 +75,7 @@ def refresh_access_token():
 
 
 # ---------------------------------------------------
-# Get valid token
+# Get valid client
 # ---------------------------------------------------
 
 async def get_client():
@@ -153,7 +153,8 @@ async def debug_files():
     for f in files:
 
         result.append({
-            "id": normalize(f.name),
+            "id": f.id,
+            "normalized_id": normalize(f.name),
             "name": f.name,
             "size": f.size,
             "is_video": f.is_video,
@@ -173,7 +174,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "23.0.0",
+        "version": "24.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
@@ -301,34 +302,49 @@ async def stream(type: str, id: str):
 
             try:
 
-                original_hls = f.presentation_urls.video["hls"]
+                # -----------------------------------
+                # Get direct Seedr download URL
+                # -----------------------------------
 
-                # Multiple quality variants
-                qualities = [
-                    ("1080p", "master-1080.m3u8"),
-                    ("720p", "master-720.m3u8"),
-                    ("480p", "master-480.m3u8"),
-                ]
+                headers = {
+                    "Authorization": f"Bearer {ACCESS_TOKEN}",
+                    "Accept": "application/json"
+                }
 
-                for quality_name, quality_file in qualities:
+                response = requests.get(
+                    f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
+                    headers=headers,
+                    timeout=15
+                )
 
-                    stream_url = re.sub(
-                        r"master-\d+\.m3u8",
-                        quality_file,
-                        original_hls
-                    )
+                print("DOWNLOAD STATUS:")
+                print(response.status_code)
 
-                    streams.append({
-                        "name": f"Seedr {quality_name}",
-                        "title": f.name,
-                        "url": stream_url,
+                print("DOWNLOAD RESPONSE:")
+                print(response.text)
 
-                        "behaviorHints": {
-                            "notWebReady": False
-                        }
-                    })
+                data = response.json()
+
+                if not data.get("success"):
+                    continue
+
+                direct_url = data.get("url")
+
+                if not direct_url:
+                    continue
+
+                streams.append({
+                    "name": "Seedr",
+                    "title": f.name,
+                    "url": direct_url,
+
+                    "behaviorHints": {
+                        "notWebReady": False
+                    }
+                })
 
             except Exception as e:
+                print("STREAM ERROR:")
                 print(e)
 
     return {"streams": streams}

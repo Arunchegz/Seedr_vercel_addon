@@ -72,7 +72,7 @@ async def get_all_files():
         for f in root.files or []:
             files.append(f)
 
-        # Walk folders recursively
+        # Walk subfolders recursively
         for folder in root.folders or []:
             nested = await walk_folder(client, folder.id)
             files.extend(nested)
@@ -80,7 +80,7 @@ async def get_all_files():
         return files
 
 # ---------------------------------------------------
-# Debug
+# Debug endpoint
 # ---------------------------------------------------
 
 @app.get("/debug/files")
@@ -106,7 +106,7 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "18.0.0",
+        "version": "19.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
@@ -237,8 +237,11 @@ async def stream(type: str, id: str):
                     "title": f.name,
                     "url": hls_url,
 
+                    # IMPORTANT:
+                    # Force external/native playback
+                    # instead of browser web player
                     "behaviorHints": {
-                        "notWebReady": False
+                        "notWebReady": True
                     }
                 })
 

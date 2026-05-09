@@ -5,8 +5,6 @@ import os
 import re
 import requests
 
-from seedr_api import SeedrClient
-
 app = FastAPI()
 
 # ---------------------------------------------------
@@ -25,6 +23,13 @@ app.add_middleware(
 # ---------------------------------------------------
 
 ACCESS_TOKEN = os.environ.get("SEEDR_ACCESS_TOKEN")
+
+BASE_URL = "https://www.seedr.cc/api/v0.1/p"
+
+HEADERS = {
+    "Authorization": f"Bearer {ACCESS_TOKEN}",
+    "Accept": "application/json"
+}
 
 # ---------------------------------------------------
 # Helpers
@@ -77,31 +82,58 @@ def extract_title_year(filename: str):
 
 
 # ---------------------------------------------------
-# Get client
+# Seedr API Helpers
 # ---------------------------------------------------
 
-async def get_client():
+def list_root_contents():
 
-    return SeedrClient.from_token(ACCESS_TOKEN)
+    response = requests.get(
+        f"{BASE_URL}/fs/root/contents",
+        headers=HEADERS,
+        timeout=15
+    )
+
+    print("ROOT STATUS:", response.status_code)
+    print("ROOT RESPONSE:", response.text)
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+def list_folder_contents(folder_id):
+
+    response = requests.get(
+        f"{BASE_URL}/fs/folder/{folder_id}/contents",
+        headers=HEADERS,
+        timeout=15
+    )
+
+    print("FOLDER STATUS:", response.status_code)
+    print("FOLDER RESPONSE:", response.text)
+
+    response.raise_for_status()
+
+    return response.json()
 
 
 # ---------------------------------------------------
 # Recursive folder walker
 # ---------------------------------------------------
 
-async def walk_folder(client, folder_id):
+def walk_folder(folder_id):
 
-    contents = await client.filesystem.list_folder_contents(folder_id)
+    contents = list_folder_contents(folder_id)
 
     files = []
 
     # Files
-    for f in contents.files or []:
+    for f in contents.get("files", []):
         files.append(f)
 
-    # Recursive folders
-    for folder in contents.folders or []:
-        nested = await walk_folder(client, folder.id)
+    # Nested folders
+    for folder in contents.get("folders", []):
+        nested = walk_folder(folder["id"])
         files.extend(nested)
 
     return files
@@ -111,24 +143,22 @@ async def walk_folder(client, folder_id):
 # Get all files
 # ---------------------------------------------------
 
-async def get_all_files():
+def get_all_files():
 
-    async with await get_client() as client:
+    root = list_root_contents()
 
-        root = await client.filesystem.list_root_contents()
+    files = []
 
-        files = []
+    # Root files
+    for f in root.get("files", []):
+        files.append(f)
 
-        # Root files
-        for f in root.files or []:
-            files.append(f)
+    # Recursive folders
+    for folder in root.get("folders", []):
+        nested = walk_folder(folder["id"])
+        files.extend(nested)
 
-        # Recursive folders
-        for folder in root.folders or []:
-            nested = await walk_folder(client, folder.id)
-            files.extend(nested)
-
-        return files
+    return files
 
 
 # ---------------------------------------------------
@@ -136,22 +166,21 @@ async def get_all_files():
 # ---------------------------------------------------
 
 @app.get("/debug/files")
-async def debug_files():
+def debug_files():
 
-    files = await get_all_files()
+    files = get_all_files()
 
     result = []
 
     for f in files:
 
         result.append({
-            "id": f.id,
-            "normalized_id": normalize(f.name),
-            "name": f.name,
-            "size": f.size,
-            "is_video": f.is_video,
-            "available": f.is_available,
-            "video_progress": f.video_progress,
+            "id": f.get("id"),
+            "normalized_id": normalize(f.get("name", "")),
+            "name": f.get("name"),
+            "size": f.get("size"),
+            "is_video": f.get("play_video"),
+            "available": f.get("is_ready"),
         })
 
     return result
@@ -166,7 +195,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "28.0.0",
+        "version": "29.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -200,33 +229,26 @@ def manifest():
 # ---------------------------------------------------
 
 @app.get("/catalog/movie/seedr.json")
-async def catalog():
+def catalog():
 
     metas = []
 
-    files = await get_all_files()
+    files = get_all_files()
 
     for f in files:
 
-        if not f.is_video:
+        if not f.get("play_video"):
             continue
 
-        poster = None
-
-        try:
-            poster = f.thumb
-        except:
-            pass
-
         metas.append({
-            "id": normalize(f.name),
+            "id": normalize(f["name"]),
             "type": "movie",
-            "name": f.name,
+            "name": f["name"],
 
-            "poster": poster,
+            "poster": f.get("thumb"),
             "posterShape": "poster",
 
-            "description": f.name,
+            "description": f["name"],
         })
 
     return {"metas": metas}
@@ -237,31 +259,24 @@ async def catalog():
 # ---------------------------------------------------
 
 @app.get("/meta/{type}/{id}.json")
-async def meta(type: str, id: str):
+def meta(type: str, id: str):
 
-    files = await get_all_files()
+    files = get_all_files()
 
     for f in files:
 
-        if normalize(id) == normalize(f.name):
-
-            poster = None
-
-            try:
-                poster = f.thumb
-            except:
-                pass
+        if normalize(id) == normalize(f["name"]):
 
             return {
                 "meta": {
-                    "id": normalize(f.name),
+                    "id": normalize(f["name"]),
                     "type": "movie",
-                    "name": f.name,
+                    "name": f["name"],
 
-                    "poster": poster,
+                    "poster": f.get("thumb"),
                     "posterShape": "poster",
 
-                    "description": f.name
+                    "description": f["name"]
                 }
             }
 
@@ -274,14 +289,9 @@ async def meta(type: str, id: str):
 
 def get_seedr_download_url(file_id):
 
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Accept": "application/json"
-    }
-
     response = requests.get(
-        f"https://www.seedr.cc/api/v0.1/p/download/file/{file_id}/url",
-        headers=headers,
+        f"{BASE_URL}/download/file/{file_id}/url",
+        headers=HEADERS,
         timeout=15
     )
 
@@ -290,6 +300,8 @@ def get_seedr_download_url(file_id):
 
     print("DOWNLOAD RESPONSE:")
     print(response.text)
+
+    response.raise_for_status()
 
     data = response.json()
 
@@ -327,7 +339,7 @@ def detect_quality(filename):
 # ---------------------------------------------------
 
 @app.get("/stream/{type}/{id}.json")
-async def stream(type: str, id: str):
+def stream(type: str, id: str):
 
     streams = []
 
@@ -336,7 +348,7 @@ async def stream(type: str, id: str):
 
     try:
 
-        files = await get_all_files()
+        files = get_all_files()
 
         # ---------------------------------------------------
         # IMDb Movie Page Matching
@@ -353,10 +365,10 @@ async def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.is_video:
+                if not f.get("play_video"):
                     continue
 
-                parsed_title, parsed_year = extract_title_year(f.name)
+                parsed_title, parsed_year = extract_title_year(f["name"])
 
                 normalized_file_title = normalize(parsed_title)
 
@@ -369,23 +381,23 @@ async def stream(type: str, id: str):
                     if movie_year != parsed_year:
                         continue
 
-                print("MATCHED:", f.name)
+                print("MATCHED:", f["name"])
 
                 try:
 
-                    direct_url = get_seedr_download_url(f.id)
+                    direct_url = get_seedr_download_url(f["id"])
 
                     if not direct_url:
                         continue
 
-                    quality = detect_quality(f.name)
+                    quality = detect_quality(f["name"])
 
                     streams.append({
                         "name": "☁️ Seedr",
 
                         "title": (
                             f"⚡ {quality}\n"
-                            f"📁 {f.name}"
+                            f"📁 {f['name']}"
                         ),
 
                         "url": direct_url,
@@ -407,27 +419,27 @@ async def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.is_video:
+                if not f.get("play_video"):
                     continue
 
-                if normalize(id) != normalize(f.name):
+                if normalize(id) != normalize(f["name"]):
                     continue
 
                 try:
 
-                    direct_url = get_seedr_download_url(f.id)
+                    direct_url = get_seedr_download_url(f["id"])
 
                     if not direct_url:
                         continue
 
-                    quality = detect_quality(f.name)
+                    quality = detect_quality(f["name"])
 
                     streams.append({
                         "name": "☁️ Seedr",
 
                         "title": (
                             f"⚡ {quality}\n"
-                            f"📁 {f.name}"
+                            f"📁 {f['name']}"
                         ),
 
                         "url": direct_url,

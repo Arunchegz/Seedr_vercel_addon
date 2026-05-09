@@ -28,12 +28,6 @@ Supports:
 
 ---
 
-## Demo
-
-```text
-☁️ My Seedr Files
-```
-
 Movies added to Seedr automatically appear in Stremio.
 
 ---

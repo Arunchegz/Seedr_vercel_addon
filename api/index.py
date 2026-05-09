@@ -62,11 +62,11 @@ async def get_all_files():
 
         files = []
 
-        # root files
+        # Root files
         for f in root.files or []:
             files.append(f)
 
-        # recursive folders
+        # Recursive folders
         for folder in root.folders or []:
             nested = await walk_folder(client, folder.id)
             files.extend(nested)
@@ -100,11 +100,24 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "13.0.0",
+        "version": "14.0.0",
         "name": "Seedr Addon",
         "description": "Stream Seedr files in Stremio",
-        "resources": ["stream", "catalog"],
-        "types": ["movie"],
+
+        "resources": [
+            "catalog",
+            "meta",
+            "stream"
+        ],
+
+        "types": [
+            "movie"
+        ],
+
+        "idPrefixes": [
+            "seedr"
+        ],
+
         "catalogs": [
             {
                 "type": "movie",
@@ -131,12 +144,45 @@ async def catalog():
             continue
 
         metas.append({
-            "id": normalize(f.name),
+            "id": f"seedr:{normalize(f.name)}",
             "type": "movie",
             "name": f.name,
         })
 
     return {"metas": metas}
+
+# ---------------------------------------------------
+# Meta
+# ---------------------------------------------------
+
+@app.get("/meta/{type}/{id}.json")
+async def meta(type: str, id: str):
+
+    clean_id = id.replace("seedr:", "")
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if normalize(clean_id) in normalize(f.name):
+
+            poster = None
+
+            try:
+                poster = f.thumb
+            except:
+                pass
+
+            return {
+                "meta": {
+                    "id": id,
+                    "type": "movie",
+                    "name": f.name,
+                    "poster": poster,
+                }
+            }
+
+    return {"meta": {}}
 
 # ---------------------------------------------------
 # Stream
@@ -147,6 +193,8 @@ async def stream(type: str, id: str):
 
     streams = []
 
+    clean_id = id.replace("seedr:", "")
+
     files = await get_all_files()
 
     for f in files:
@@ -154,7 +202,7 @@ async def stream(type: str, id: str):
         if not f.name:
             continue
 
-        if normalize(id) in normalize(f.name):
+        if normalize(clean_id) in normalize(f.name):
 
             hls_url = None
 

@@ -43,11 +43,11 @@ async def walk_folder(client, folder_id):
 
     files = []
 
-    # Files inside current folder
+    # Files in current folder
     for f in contents.files or []:
         files.append(f)
 
-    # Recurse into subfolders
+    # Recursive folders
     for folder in contents.folders or []:
         nested = await walk_folder(client, folder.id)
         files.extend(nested)
@@ -55,7 +55,7 @@ async def walk_folder(client, folder_id):
     return files
 
 # ---------------------------------------------------
-# Get all files from Seedr
+# Get all files
 # ---------------------------------------------------
 
 async def get_all_files():
@@ -72,7 +72,7 @@ async def get_all_files():
         for f in root.files or []:
             files.append(f)
 
-        # Walk all folders recursively
+        # Walk folders recursively
         for folder in root.folders or []:
             nested = await walk_folder(client, folder.id)
             files.extend(nested)
@@ -80,7 +80,7 @@ async def get_all_files():
         return files
 
 # ---------------------------------------------------
-# Debug endpoint
+# Debug
 # ---------------------------------------------------
 
 @app.get("/debug/files")
@@ -106,12 +106,13 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "17.0.0",
+        "version": "18.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
         "resources": [
             "catalog",
+            "meta",
             "stream"
         ],
 
@@ -155,10 +156,57 @@ async def catalog():
             "id": normalize(f.name),
             "type": "movie",
             "name": f.name,
+
             "poster": poster,
+            "posterShape": "poster",
+
+            "description": f.name,
         })
 
     return {"metas": metas}
+
+# ---------------------------------------------------
+# Meta
+# ---------------------------------------------------
+
+@app.get("/meta/{type}/{id}.json")
+async def meta(type: str, id: str):
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if normalize(id) == normalize(f.name):
+
+            poster = None
+
+            try:
+                poster = f.thumb
+            except:
+                pass
+
+            return {
+                "meta": {
+                    "id": normalize(f.name),
+                    "type": "movie",
+                    "name": f.name,
+
+                    "poster": poster,
+                    "posterShape": "poster",
+
+                    "description": f.name,
+
+                    "videos": [
+                        {
+                            "id": normalize(f.name),
+                            "title": f.name,
+                            "released": "2026-01-01T00:00:00.000Z"
+                        }
+                    ]
+                }
+            }
+
+    return {"meta": {}}
 
 # ---------------------------------------------------
 # Stream
@@ -187,7 +235,11 @@ async def stream(type: str, id: str):
                 streams.append({
                     "name": "Seedr",
                     "title": f.name,
-                    "url": hls_url
+                    "url": hls_url,
+
+                    "behaviorHints": {
+                        "notWebReady": False
+                    }
                 })
 
             except:

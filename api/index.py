@@ -47,7 +47,7 @@ async def walk_folder(client, folder_id):
     for f in contents.files or []:
         files.append(f)
 
-    # Recursive folders
+    # Walk subfolders recursively
     for folder in contents.folders or []:
         nested = await walk_folder(client, folder.id)
         files.extend(nested)
@@ -72,7 +72,7 @@ async def get_all_files():
         for f in root.files or []:
             files.append(f)
 
-        # Walk subfolders recursively
+        # Recursive folders
         for folder in root.folders or []:
             nested = await walk_folder(client, folder.id)
             files.extend(nested)
@@ -106,7 +106,7 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "19.0.0",
+        "version": "20.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
@@ -230,20 +230,34 @@ async def stream(type: str, id: str):
         if normalize(id) == normalize(f.name):
 
             try:
-                hls_url = f.presentation_urls.video["hls"]
 
-                streams.append({
-                    "name": "Seedr",
-                    "title": f.name,
-                    "url": hls_url,
+                original_hls = f.presentation_urls.video["hls"]
 
-                    # IMPORTANT:
-                    # Force external/native playback
-                    # instead of browser web player
-                    "behaviorHints": {
-                        "notWebReady": True
-                    }
-                })
+                # Multiple quality variants
+                qualities = [
+                    ("2160p", "master-2160.m3u8"),
+                    ("1080p", "master-1080.m3u8"),
+                    ("720p", "master-720.m3u8"),
+                    ("480p", "master-480.m3u8"),
+                ]
+
+                for quality_name, quality_file in qualities:
+
+                    stream_url = re.sub(
+                        r"master-\d+\.m3u8",
+                        quality_file,
+                        original_hls
+                    )
+
+                    streams.append({
+                        "name": f"Seedr {quality_name}",
+                        "title": f.name,
+                        "url": stream_url,
+
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
 
             except:
                 pass

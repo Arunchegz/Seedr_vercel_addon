@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import os
 import re
+import urllib.parse
 
 from seedr_api import SeedrClient
 
@@ -35,10 +36,40 @@ def get_token():
     return token
 
 # ---------------------------------------------------
+# Build direct Seedr download URL
+# ---------------------------------------------------
+
+def build_direct_url(file_obj):
+
+    # Extract base URL from HLS URL
+    hls_url = file_obj.presentation_urls.video["hls"]
+
+    # Example:
+    # https://rd23.seedr.cc/presentations/p/file/v1/784606/5908559199/assets/video/master-2160.m3u8
+
+    match = re.search(r"https://([^/]+)/", hls_url)
+
+    if not match:
+        return None
+
+    domain = match.group(1)
+
+    encoded_name = urllib.parse.quote(file_obj.name)
+
+    direct_url = (
+        f"https://{domain}/ff_get/"
+        f"{file_obj.id}/"
+        f"{encoded_name}"
+    )
+
+    return direct_url
+
+# ---------------------------------------------------
 # Recursive folder walker
 # ---------------------------------------------------
 
 async def walk_folder(client, folder_id):
+
     contents = await client.filesystem.list_folder_contents(folder_id)
 
     files = []
@@ -55,7 +86,7 @@ async def walk_folder(client, folder_id):
     return files
 
 # ---------------------------------------------------
-# Get all files
+# Get all Seedr files
 # ---------------------------------------------------
 
 async def get_all_files():
@@ -80,7 +111,7 @@ async def get_all_files():
         return files
 
 # ---------------------------------------------------
-# Debug endpoint
+# Debug
 # ---------------------------------------------------
 
 @app.get("/debug/files")
@@ -88,15 +119,28 @@ async def debug_files():
 
     files = await get_all_files()
 
-    return [
-        {
+    result = []
+
+    for f in files:
+
+        if not f.is_video:
+            continue
+
+        direct_url = None
+
+        try:
+            direct_url = build_direct_url(f)
+        except:
+            pass
+
+        result.append({
             "id": normalize(f.name),
             "name": f.name,
             "size": f.size,
-            "is_video": f.is_video,
-        }
-        for f in files
-    ]
+            "direct_url": direct_url
+        })
+
+    return result
 
 # ---------------------------------------------------
 # Manifest
@@ -106,7 +150,7 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "20.0.0",
+        "version": "21.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
@@ -224,42 +268,51 @@ async def stream(type: str, id: str):
 
     for f in files:
 
-        if not f.name:
+        if not f.is_video:
             continue
 
         if normalize(id) == normalize(f.name):
 
             try:
 
-                original_hls = f.presentation_urls.video["hls"]
+                # ---------------------------------------------------
+                # Direct MKV URL
+                # ---------------------------------------------------
 
-                # Multiple quality variants
-                qualities = [
-                    ("2160p", "master-2160.m3u8"),
-                    ("1080p", "master-1080.m3u8"),
-                    ("720p", "master-720.m3u8"),
-                    ("480p", "master-480.m3u8"),
-                ]
+                direct_url = build_direct_url(f)
 
-                for quality_name, quality_file in qualities:
+                streams.append({
+                    "name": "Seedr Direct",
+                    "title": f.name,
+                    "url": direct_url,
 
-                    stream_url = re.sub(
-                        r"master-\d+\.m3u8",
-                        quality_file,
-                        original_hls
-                    )
+                    "behaviorHints": {
+                        "notWebReady": False
+                    }
+                })
 
-                    streams.append({
-                        "name": f"Seedr {quality_name}",
-                        "title": f.name,
-                        "url": stream_url,
+                # ---------------------------------------------------
+                # HLS 1080p fallback
+                # ---------------------------------------------------
 
-                        "behaviorHints": {
-                            "notWebReady": False
-                        }
-                    })
+                hls_url = f.presentation_urls.video["hls"]
 
-            except:
-                pass
+                hls_url = hls_url.replace(
+                    "master-2160.m3u8",
+                    "master-1080.m3u8"
+                )
+
+                streams.append({
+                    "name": "Seedr HLS 1080p",
+                    "title": f.name,
+                    "url": hls_url,
+
+                    "behaviorHints": {
+                        "notWebReady": False
+                    }
+                })
+
+            except Exception as e:
+                print(e)
 
     return {"streams": streams}

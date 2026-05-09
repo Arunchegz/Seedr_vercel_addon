@@ -1,4 +1,4 @@
 fastapi
 uvicorn
 requests
-seedr_api
+seedr-api-client

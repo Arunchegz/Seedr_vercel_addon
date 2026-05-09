@@ -1,3 +1,5 @@
 fastapi
 uvicorn
-seedr-api-client
+requests
+seedrcc
+upstash-redis

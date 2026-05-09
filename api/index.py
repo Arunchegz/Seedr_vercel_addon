@@ -65,7 +65,7 @@ def extract_title_year(filename: str):
     year = year_match.group(0) if year_match else ""
 
     title = re.sub(
-        r"\.(mkv|mp4|avi|mov|webm|wmv).*",
+        r"\.(mkv|mp4|avi|mov|webm|wmv|srt).*",
         "",
         filename,
         flags=re.I
@@ -179,8 +179,8 @@ def debug_files():
             "normalized_id": normalize(f.get("name", "")),
             "name": f.get("name"),
             "size": f.get("size"),
-            "is_video": f.get("play_video"),
-            "available": f.get("is_ready"),
+            "is_video": f.get("is_video"),
+            "thumb": f.get("thumb"),
         })
 
     return result
@@ -195,7 +195,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "29.0.0",
+        "version": "30.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -237,7 +237,7 @@ def catalog():
 
     for f in files:
 
-        if not f.get("play_video"):
+        if not f.get("is_video"):
             continue
 
         metas.append({
@@ -250,6 +250,8 @@ def catalog():
 
             "description": f["name"],
         })
+
+    print("CATALOG ITEMS:", len(metas))
 
     return {"metas": metas}
 
@@ -295,11 +297,8 @@ def get_seedr_download_url(file_id):
         timeout=15
     )
 
-    print("DOWNLOAD STATUS:")
-    print(response.status_code)
-
-    print("DOWNLOAD RESPONSE:")
-    print(response.text)
+    print("DOWNLOAD STATUS:", response.status_code)
+    print("DOWNLOAD RESPONSE:", response.text)
 
     response.raise_for_status()
 
@@ -351,7 +350,7 @@ def stream(type: str, id: str):
         files = get_all_files()
 
         # ---------------------------------------------------
-        # IMDb Movie Page Matching
+        # IMDb Matching
         # ---------------------------------------------------
 
         if id.startswith("tt"):
@@ -365,7 +364,7 @@ def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.get("play_video"):
+                if not f.get("is_video"):
                     continue
 
                 parsed_title, parsed_year = extract_title_year(f["name"])
@@ -408,6 +407,7 @@ def stream(type: str, id: str):
                     })
 
                 except Exception as e:
+
                     print("STREAM ERROR:")
                     print(e)
 
@@ -419,7 +419,7 @@ def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.get("play_video"):
+                if not f.get("is_video"):
                     continue
 
                 if normalize(id) != normalize(f["name"]):
@@ -450,6 +450,7 @@ def stream(type: str, id: str):
                     })
 
                 except Exception as e:
+
                     print("STREAM ERROR:")
                     print(e)
 

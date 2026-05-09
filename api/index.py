@@ -1,54 +1,334 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+import os
+import re
 import requests
-import json
+
+from seedr_api import SeedrClient
+
+app = FastAPI()
 
 # ---------------------------------------------------
-# Seedr OAuth Config
+# CORS
 # ---------------------------------------------------
 
-CLIENT_ID = "YOUR_CLIENT_ID"
-
-REFRESH_TOKEN = "YOUR_REFRESH_TOKEN"
-
-# ---------------------------------------------------
-# Refresh Access Token
-# ---------------------------------------------------
-
-response = requests.post(
-    "https://v2.seedr.cc/api/v0.1/p/oauth/token",
-    data={
-        "grant_type": "refresh_token",
-        "refresh_token": REFRESH_TOKEN,
-        "client_id": CLIENT_ID
-    }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---------------------------------------------------
-# Output
+# OAuth Config
 # ---------------------------------------------------
 
-print("STATUS CODE:\n")
-print(response.status_code)
+CLIENT_ID = os.environ.get("SEEDR_CLIENT_ID")
 
-print("\nRESPONSE:\n")
-print(json.dumps(response.json(), indent=2))
+ACCESS_TOKEN = os.environ.get("SEEDR_ACCESS_TOKEN")
+
+REFRESH_TOKEN = os.environ.get("SEEDR_REFRESH_TOKEN")
 
 # ---------------------------------------------------
-# Extract new tokens
+# Helpers
 # ---------------------------------------------------
 
-data = response.json()
+def normalize(text):
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
-if "access_token" in data:
 
-    print("\nNEW ACCESS TOKEN:\n")
-    print(data["access_token"])
+# ---------------------------------------------------
+# Refresh expired access token
+# ---------------------------------------------------
 
-    print("\nNEW REFRESH TOKEN:\n")
-    print(data.get("refresh_token"))
+def refresh_access_token():
 
-    print("\nSCOPES:\n")
-    print(data.get("scope"))
+    global ACCESS_TOKEN
+    global REFRESH_TOKEN
 
-else:
+    response = requests.post(
+        "https://v2.seedr.cc/api/v0.1/p/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": REFRESH_TOKEN,
+            "client_id": CLIENT_ID
+        },
+        timeout=15
+    )
 
-    print("\nTOKEN REFRESH FAILED")
+    data = response.json()
+
+    print("TOKEN REFRESH RESPONSE:")
+    print(data)
+
+    if "access_token" not in data:
+        raise Exception("Failed to refresh access token")
+
+    ACCESS_TOKEN = data["access_token"]
+
+    # Refresh token rotation support
+    if "refresh_token" in data:
+        REFRESH_TOKEN = data["refresh_token"]
+
+    return ACCESS_TOKEN
+
+
+# ---------------------------------------------------
+# Get valid token
+# ---------------------------------------------------
+
+async def get_client():
+
+    global ACCESS_TOKEN
+
+    try:
+        return SeedrClient.from_token(ACCESS_TOKEN)
+
+    except Exception:
+
+        # Try refresh automatically
+        new_token = refresh_access_token()
+
+        return SeedrClient.from_token(new_token)
+
+
+# ---------------------------------------------------
+# Recursive folder walker
+# ---------------------------------------------------
+
+async def walk_folder(client, folder_id):
+
+    contents = await client.filesystem.list_folder_contents(folder_id)
+
+    files = []
+
+    # Files
+    for f in contents.files or []:
+        files.append(f)
+
+    # Recursive folders
+    for folder in contents.folders or []:
+        nested = await walk_folder(client, folder.id)
+        files.extend(nested)
+
+    return files
+
+
+# ---------------------------------------------------
+# Get all files
+# ---------------------------------------------------
+
+async def get_all_files():
+
+    async with await get_client() as client:
+
+        root = await client.filesystem.list_root_contents()
+
+        files = []
+
+        # Root files
+        for f in root.files or []:
+            files.append(f)
+
+        # Recursive folders
+        for folder in root.folders or []:
+            nested = await walk_folder(client, folder.id)
+            files.extend(nested)
+
+        return files
+
+
+# ---------------------------------------------------
+# Debug endpoint
+# ---------------------------------------------------
+
+@app.get("/debug/files")
+async def debug_files():
+
+    files = await get_all_files()
+
+    result = []
+
+    for f in files:
+
+        result.append({
+            "id": normalize(f.name),
+            "name": f.name,
+            "size": f.size,
+            "is_video": f.is_video,
+            "available": f.is_available,
+            "video_progress": f.video_progress,
+        })
+
+    return result
+
+
+# ---------------------------------------------------
+# Manifest
+# ---------------------------------------------------
+
+@app.get("/manifest.json")
+def manifest():
+
+    return {
+        "id": "org.seedrcc.stremio",
+        "version": "23.0.0",
+        "name": "Seedr Addon",
+        "description": "Stream your Seedr files in Stremio",
+
+        "resources": [
+            "catalog",
+            "meta",
+            "stream"
+        ],
+
+        "types": [
+            "movie"
+        ],
+
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "seedr",
+                "name": "My Seedr Files"
+            }
+        ]
+    }
+
+
+# ---------------------------------------------------
+# Catalog
+# ---------------------------------------------------
+
+@app.get("/catalog/movie/seedr.json")
+async def catalog():
+
+    metas = []
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if not f.is_video:
+            continue
+
+        poster = None
+
+        try:
+            poster = f.thumb
+        except:
+            pass
+
+        metas.append({
+            "id": normalize(f.name),
+            "type": "movie",
+            "name": f.name,
+
+            "poster": poster,
+            "posterShape": "poster",
+
+            "description": f.name,
+        })
+
+    return {"metas": metas}
+
+
+# ---------------------------------------------------
+# Meta
+# ---------------------------------------------------
+
+@app.get("/meta/{type}/{id}.json")
+async def meta(type: str, id: str):
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if normalize(id) == normalize(f.name):
+
+            poster = None
+
+            try:
+                poster = f.thumb
+            except:
+                pass
+
+            return {
+                "meta": {
+                    "id": normalize(f.name),
+                    "type": "movie",
+                    "name": f.name,
+
+                    "poster": poster,
+                    "posterShape": "poster",
+
+                    "description": f.name,
+
+                    "videos": [
+                        {
+                            "id": normalize(f.name),
+                            "title": f.name,
+                            "released": "2026-01-01T00:00:00.000Z"
+                        }
+                    ]
+                }
+            }
+
+    return {"meta": {}}
+
+
+# ---------------------------------------------------
+# Stream
+# ---------------------------------------------------
+
+@app.get("/stream/{type}/{id}.json")
+async def stream(type: str, id: str):
+
+    streams = []
+
+    if type != "movie":
+        return {"streams": []}
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if not f.is_video:
+            continue
+
+        if normalize(id) == normalize(f.name):
+
+            try:
+
+                original_hls = f.presentation_urls.video["hls"]
+
+                # Multiple quality variants
+                qualities = [
+                    ("1080p", "master-1080.m3u8"),
+                    ("720p", "master-720.m3u8"),
+                    ("480p", "master-480.m3u8"),
+                ]
+
+                for quality_name, quality_file in qualities:
+
+                    stream_url = re.sub(
+                        r"master-\d+\.m3u8",
+                        quality_file,
+                        original_hls
+                    )
+
+                    streams.append({
+                        "name": f"Seedr {quality_name}",
+                        "title": f.name,
+                        "url": stream_url,
+
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
+
+            except Exception as e:
+                print(e)
+
+    return {"streams": streams}

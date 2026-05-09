@@ -166,11 +166,13 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "26.0.0",
+        "version": "27.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
         "resources": [
+            "catalog",
+            "meta",
             "stream"
         ],
 
@@ -182,8 +184,87 @@ def manifest():
             "tt"
         ],
 
-        "catalogs": []
+        "catalogs": [
+            {
+                "type": "movie",
+                "id": "seedr",
+                "name": "My Seedr Files"
+            }
+        ]
     }
+
+
+# ---------------------------------------------------
+# Catalog
+# ---------------------------------------------------
+
+@app.get("/catalog/movie/seedr.json")
+async def catalog():
+
+    metas = []
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if not f.is_video:
+            continue
+
+        poster = None
+
+        try:
+            poster = f.thumb
+        except:
+            pass
+
+        metas.append({
+            "id": normalize(f.name),
+            "type": "movie",
+            "name": f.name,
+
+            "poster": poster,
+            "posterShape": "poster",
+
+            "description": f.name,
+        })
+
+    return {"metas": metas}
+
+
+# ---------------------------------------------------
+# Meta
+# ---------------------------------------------------
+
+@app.get("/meta/{type}/{id}.json")
+async def meta(type: str, id: str):
+
+    files = await get_all_files()
+
+    for f in files:
+
+        if normalize(id) == normalize(f.name):
+
+            poster = None
+
+            try:
+                poster = f.thumb
+            except:
+                pass
+
+            return {
+                "meta": {
+                    "id": normalize(f.name),
+                    "type": "movie",
+                    "name": f.name,
+
+                    "poster": poster,
+                    "posterShape": "poster",
+
+                    "description": f.name
+                }
+            }
+
+    return {"meta": {}}
 
 
 # ---------------------------------------------------
@@ -200,110 +281,156 @@ async def stream(type: str, id: str):
 
     try:
 
-        # -----------------------------------
-        # Get movie title from IMDb ID
-        # -----------------------------------
+        # ---------------------------------------------------
+        # IMDb page support
+        # ---------------------------------------------------
 
-        movie_title, movie_year = get_movie_title(id)
+        if id.startswith("tt"):
 
-        print("MOVIE TITLE:", movie_title)
-        print("MOVIE YEAR:", movie_year)
+            movie_title, movie_year = get_movie_title(id)
 
-        target_title = normalize(movie_title)
+            print("MOVIE TITLE:", movie_title)
+            print("MOVIE YEAR:", movie_year)
 
-        files = await get_all_files()
+            target_title = normalize(movie_title)
 
-        for f in files:
+            files = await get_all_files()
 
-            if not f.is_video:
-                continue
+            for f in files:
 
-            parsed_title, parsed_year = extract_title_year(f.name)
-
-            normalized_file_title = normalize(parsed_title)
-
-            # -----------------------------------
-            # Match movie title
-            # -----------------------------------
-
-            if target_title not in normalized_file_title:
-                continue
-
-            # Optional year check
-            if movie_year and parsed_year:
-                if movie_year != parsed_year:
+                if not f.is_video:
                     continue
 
-            print("MATCHED:", f.name)
+                parsed_title, parsed_year = extract_title_year(f.name)
 
-            # -----------------------------------
-            # Get direct Seedr URL
-            # -----------------------------------
+                normalized_file_title = normalize(parsed_title)
 
-            headers = {
-                "Authorization": f"Bearer {ACCESS_TOKEN}",
-                "Accept": "application/json"
-            }
+                # Match title
+                if target_title not in normalized_file_title:
+                    continue
 
-            response = requests.get(
-                f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
-                headers=headers,
-                timeout=15
-            )
+                # Match year if available
+                if movie_year and parsed_year:
+                    if movie_year != parsed_year:
+                        continue
 
-            print("DOWNLOAD STATUS:")
-            print(response.status_code)
+                print("MATCHED:", f.name)
 
-            print("DOWNLOAD RESPONSE:")
-            print(response.text)
+                try:
 
-            data = response.json()
+                    headers = {
+                        "Authorization": f"Bearer {ACCESS_TOKEN}",
+                        "Accept": "application/json"
+                    }
 
-            if not data.get("success"):
-                continue
+                    response = requests.get(
+                        f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
+                        headers=headers,
+                        timeout=15
+                    )
 
-            direct_url = data.get("url")
+                    data = response.json()
 
-            if not direct_url:
-                continue
+                    print("DOWNLOAD RESPONSE:")
+                    print(data)
 
-            # -----------------------------------
-            # Quality detection
-            # -----------------------------------
+                    if not data.get("success"):
+                        continue
 
-            quality = "Auto"
+                    direct_url = data.get("url")
 
-            filename_lower = f.name.lower()
+                    if not direct_url:
+                        continue
 
-            if "2160" in filename_lower or "4k" in filename_lower:
-                quality = "4K"
+                    quality = "Auto"
 
-            elif "1080" in filename_lower:
-                quality = "1080p"
+                    filename_lower = f.name.lower()
 
-            elif "720" in filename_lower:
-                quality = "720p"
+                    if "2160" in filename_lower or "4k" in filename_lower:
+                        quality = "4K"
 
-            elif "480" in filename_lower:
-                quality = "480p"
+                    elif "1080" in filename_lower:
+                        quality = "1080p"
 
-            # -----------------------------------
-            # Stream entry
-            # -----------------------------------
+                    elif "720" in filename_lower:
+                        quality = "720p"
 
-            streams.append({
-                "name": f"Seedr {quality}",
-                "title": f.name,
-                "url": direct_url,
+                    elif "480" in filename_lower:
+                        quality = "480p"
 
-                "behaviorHints": {
-                    "notWebReady": False
-                }
-            })
+                    streams.append({
+                        "name": f"Seedr {quality}",
+                        "title": f.name,
+                        "url": direct_url,
+
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
+
+                except Exception as e:
+                    print("STREAM ERROR:")
+                    print(e)
+
+        # ---------------------------------------------------
+        # Catalog page support
+        # ---------------------------------------------------
+
+        else:
+
+            files = await get_all_files()
+
+            for f in files:
+
+                if not f.is_video:
+                    continue
+
+                if normalize(id) != normalize(f.name):
+                    continue
+
+                try:
+
+                    headers = {
+                        "Authorization": f"Bearer {ACCESS_TOKEN}",
+                        "Accept": "application/json"
+                    }
+
+                    response = requests.get(
+                        f"https://www.seedr.cc/api/v0.1/p/download/file/{f.id}/url",
+                        headers=headers,
+                        timeout=15
+                    )
+
+                    data = response.json()
+
+                    print("DOWNLOAD RESPONSE:")
+                    print(data)
+
+                    if not data.get("success"):
+                        continue
+
+                    direct_url = data.get("url")
+
+                    if not direct_url:
+                        continue
+
+                    streams.append({
+                        "name": "Seedr",
+                        "title": f.name,
+                        "url": direct_url,
+
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
+
+                except Exception as e:
+                    print("STREAM ERROR:")
+                    print(e)
 
     except Exception as e:
 
-        print("STREAM ERROR:")
+        print("MAIN STREAM ERROR:")
         print(e)
 
     return {"streams": streams}

@@ -100,7 +100,7 @@ async def debug_files():
 def manifest():
     return {
         "id": "org.seedrcc.stremio",
-        "version": "14.0.0",
+        "version": "15.0.0",
         "name": "Seedr Addon",
         "description": "Stream Seedr files in Stremio",
 
@@ -143,10 +143,22 @@ async def catalog():
         if not f.name:
             continue
 
+        poster = None
+
+        try:
+            poster = f.thumb
+        except:
+            pass
+
         metas.append({
             "id": f"seedr:{normalize(f.name)}",
             "type": "movie",
             "name": f.name,
+
+            "poster": poster,
+            "posterShape": "landscape",
+
+            "description": f.name,
         })
 
     return {"metas": metas}
@@ -178,7 +190,11 @@ async def meta(type: str, id: str):
                     "id": id,
                     "type": "movie",
                     "name": f.name,
+
                     "poster": poster,
+                    "posterShape": "landscape",
+
+                    "description": f.name,
                 }
             }
 
@@ -217,6 +233,7 @@ async def stream(type: str, id: str):
                     "name": "Seedr",
                     "title": f.name,
                     "url": hls_url,
+
                     "behaviorHints": {
                         "notWebReady": False
                     }

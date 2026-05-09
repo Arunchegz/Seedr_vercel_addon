@@ -19,12 +19,12 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------
-# Permanent Access Token
+# Config
 # ---------------------------------------------------
 
 ACCESS_TOKEN = os.environ.get("SEEDR_ACCESS_TOKEN")
 
-BASE_URL = "https://www.seedr.cc/api/v0.1"
+BASE_URL = "https://v2.seedr.cc/api/v0.1"
 
 # ---------------------------------------------------
 # Helpers
@@ -40,6 +40,15 @@ def seedr_headers():
         "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Accept": "application/json"
     }
+
+
+def is_video_file(filename):
+
+    return re.search(
+        r"\.(mkv|mp4|avi|mov|webm|wmv)$",
+        filename,
+        re.I
+    )
 
 
 def get_movie_title(imdb_id: str):
@@ -84,10 +93,6 @@ def extract_title_year(filename: str):
     return title, year
 
 
-# ---------------------------------------------------
-# Detect quality
-# ---------------------------------------------------
-
 def detect_quality(filename):
 
     filename_lower = filename.lower()
@@ -108,21 +113,31 @@ def detect_quality(filename):
 
 
 # ---------------------------------------------------
-# Recursive folder traversal
+# Filesystem API
 # ---------------------------------------------------
 
 def get_folder_contents(folder_id=None):
 
-    url = f"{BASE_URL}/p/folder"
+    # Root folder
+    if folder_id is None:
 
-    if folder_id:
-        url += f"/{folder_id}"
+        url = f"{BASE_URL}/fs/root/contents"
+
+    else:
+
+        url = f"{BASE_URL}/fs/folder/{folder_id}/contents"
 
     response = requests.get(
         url,
         headers=seedr_headers(),
         timeout=15
     )
+
+    print("FOLDER STATUS:")
+    print(response.status_code)
+
+    print("FOLDER RESPONSE:")
+    print(response.text)
 
     response.raise_for_status()
 
@@ -150,23 +165,19 @@ def walk_folder(folder_id=None):
     return files
 
 
-# ---------------------------------------------------
-# Get all files
-# ---------------------------------------------------
-
 def get_all_files():
 
     return walk_folder()
 
 
 # ---------------------------------------------------
-# Get Seedr direct URL
+# Download URL
 # ---------------------------------------------------
 
 def get_seedr_download_url(file_id):
 
     response = requests.get(
-        f"{BASE_URL}/p/download/file/{file_id}/url",
+        f"https://www.seedr.cc/api/v0.1/p/download/file/{file_id}/url",
         headers=seedr_headers(),
         timeout=15
     )
@@ -186,7 +197,7 @@ def get_seedr_download_url(file_id):
 
 
 # ---------------------------------------------------
-# Debug endpoint
+# Debug
 # ---------------------------------------------------
 
 @app.get("/debug/files")
@@ -200,9 +211,9 @@ def debug_files():
 
         result.append({
             "id": f.get("id"),
-            "normalized_id": normalize(f.get("name", "")),
             "name": f.get("name"),
             "size": f.get("size"),
+            "normalized_id": normalize(f.get("name", ""))
         })
 
     return result
@@ -217,7 +228,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "29.0.0",
+        "version": "30.0.0",
 
         "name": "☁️ Seedr",
 
@@ -262,7 +273,7 @@ def catalog():
 
         name = f.get("name", "")
 
-        if not re.search(r"\.(mkv|mp4|avi|mov|webm|wmv)$", name, re.I):
+        if not is_video_file(name):
             continue
 
         metas.append({
@@ -325,7 +336,7 @@ def stream(type: str, id: str):
         files = get_all_files()
 
         # ---------------------------------------------------
-        # IMDb Movie Matching
+        # IMDb movie page matching
         # ---------------------------------------------------
 
         if id.startswith("tt"):
@@ -341,18 +352,14 @@ def stream(type: str, id: str):
 
                 name = f.get("name", "")
 
-                if not re.search(
-                    r"\.(mkv|mp4|avi|mov|webm|wmv)$",
-                    name,
-                    re.I
-                ):
+                if not is_video_file(name):
                     continue
 
                 parsed_title, parsed_year = extract_title_year(name)
 
                 normalized_file_title = normalize(parsed_title)
 
-                # Match title
+                # Match movie title
                 if target_title not in normalized_file_title:
                     continue
 
@@ -388,11 +395,12 @@ def stream(type: str, id: str):
                     })
 
                 except Exception as e:
+
                     print("STREAM ERROR:")
                     print(e)
 
         # ---------------------------------------------------
-        # Personal Catalog Matching
+        # Personal catalog matching
         # ---------------------------------------------------
 
         else:
@@ -429,6 +437,7 @@ def stream(type: str, id: str):
                     })
 
                 except Exception as e:
+
                     print("STREAM ERROR:")
                     print(e)
 

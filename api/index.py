@@ -21,14 +21,10 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------
-# OAuth Config
+# Permanent Access Token
 # ---------------------------------------------------
 
-CLIENT_ID = os.environ.get("SEEDR_CLIENT_ID")
-
 ACCESS_TOKEN = os.environ.get("SEEDR_ACCESS_TOKEN")
-
-REFRESH_TOKEN = os.environ.get("SEEDR_REFRESH_TOKEN")
 
 # ---------------------------------------------------
 # Helpers
@@ -39,58 +35,12 @@ def normalize(text):
 
 
 # ---------------------------------------------------
-# Refresh expired access token
-# ---------------------------------------------------
-
-def refresh_access_token():
-
-    global ACCESS_TOKEN
-    global REFRESH_TOKEN
-
-    response = requests.post(
-        "https://v2.seedr.cc/api/v0.1/p/oauth/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": REFRESH_TOKEN,
-            "client_id": CLIENT_ID
-        },
-        timeout=15
-    )
-
-    data = response.json()
-
-    print("TOKEN REFRESH RESPONSE:")
-    print(data)
-
-    if "access_token" not in data:
-        raise Exception("Failed to refresh access token")
-
-    ACCESS_TOKEN = data["access_token"]
-
-    # Refresh token rotation support
-    if "refresh_token" in data:
-        REFRESH_TOKEN = data["refresh_token"]
-
-    return ACCESS_TOKEN
-
-
-# ---------------------------------------------------
-# Get valid client
+# Get client
 # ---------------------------------------------------
 
 async def get_client():
 
-    global ACCESS_TOKEN
-
-    try:
-        return SeedrClient.from_token(ACCESS_TOKEN)
-
-    except Exception:
-
-        # Try refresh automatically
-        new_token = refresh_access_token()
-
-        return SeedrClient.from_token(new_token)
+    return SeedrClient.from_token(ACCESS_TOKEN)
 
 
 # ---------------------------------------------------
@@ -174,7 +124,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "24.0.0",
+        "version": "25.0.0",
         "name": "Seedr Addon",
         "description": "Stream your Seedr files in Stremio",
 
@@ -301,10 +251,6 @@ async def stream(type: str, id: str):
         if normalize(id) == normalize(f.name):
 
             try:
-
-                # -----------------------------------
-                # Get direct Seedr download URL
-                # -----------------------------------
 
                 headers = {
                     "Authorization": f"Bearer {ACCESS_TOKEN}",

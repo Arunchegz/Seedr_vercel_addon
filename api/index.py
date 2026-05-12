@@ -65,7 +65,6 @@ def extract_title_year(filename: str):
     year = year_match.group(0) if year_match else ""
 
     title = re.sub(
-        r"\.(mkv|mp4|avi|mov|webm|wmv).*",
         r"\.(mkv|mp4|avi|mov|webm|wmv|srt).*",
         "",
         filename,
@@ -180,8 +179,6 @@ def debug_files():
             "normalized_id": normalize(f.get("name", "")),
             "name": f.get("name"),
             "size": f.get("size"),
-            "is_video": f.get("play_video"),
-            "available": f.get("is_ready"),
             "is_video": f.get("is_video"),
             "thumb": f.get("thumb"),
         })
@@ -198,7 +195,6 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "29.0.0",
         "version": "30.0.0",
         "name": "☁️ Seedr",
 
@@ -241,7 +237,6 @@ def catalog():
 
     for f in files:
 
-        if not f.get("play_video"):
         if not f.get("is_video"):
             continue
 
@@ -302,11 +297,6 @@ def get_seedr_download_url(file_id):
         timeout=15
     )
 
-    print("DOWNLOAD STATUS:")
-    print(response.status_code)
-
-    print("DOWNLOAD RESPONSE:")
-    print(response.text)
     print("DOWNLOAD STATUS:", response.status_code)
     print("DOWNLOAD RESPONSE:", response.text)
 
@@ -360,7 +350,6 @@ def stream(type: str, id: str):
         files = get_all_files()
 
         # ---------------------------------------------------
-        # IMDb Movie Page Matching
         # IMDb Matching
         # ---------------------------------------------------
 
@@ -375,7 +364,6 @@ def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.get("play_video"):
                 if not f.get("is_video"):
                     continue
 
@@ -431,7 +419,6 @@ def stream(type: str, id: str):
 
             for f in files:
 
-                if not f.get("play_video"):
                 if not f.get("is_video"):
                     continue
 

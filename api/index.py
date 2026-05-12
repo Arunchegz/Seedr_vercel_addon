@@ -79,6 +79,9 @@ def extract_title_year(filename: str):
     title = re.sub(r"S\d{1,2}E\d{1,2}.*", "", title, flags=re.I)
     title = re.sub(r"\d{1,2}x\d{1,2}.*", "", title, flags=re.I)
 
+    # Remove IMDb ID
+    title = re.sub(r"tt\d{7,9}", "", title, flags=re.I)
+
     title = title.replace(".", " ")
     title = title.replace("_", " ")
 
@@ -201,13 +204,10 @@ def debug_files():
 
         result.append({
             "id": f.get("id"),
-            "normalized_id": normalize(f.get("name", "")),
             "name": f.get("name"),
             "season": season,
             "episode": episode,
-            "size": f.get("size"),
             "is_video": f.get("is_video"),
-            "thumb": f.get("thumb"),
         })
 
     return result
@@ -222,7 +222,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "32.0.0",
+        "version": "33.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -259,8 +259,6 @@ def manifest():
 
 # ---------------------------------------------------
 # MOVIE CATALOG
-# IMPORTANT:
-# Keep route as /catalog/movie/seedr.json
 # ---------------------------------------------------
 
 @app.get("/catalog/movie/seedr.json")
@@ -299,6 +297,10 @@ def movie_catalog():
 
 # ---------------------------------------------------
 # SERIES CATALOG
+# IMPORTANT:
+# Filenames MUST contain IMDb ID
+# Example:
+# The.Mandalorian.tt8111088.S01E01.mkv
 # ---------------------------------------------------
 
 @app.get("/catalog/series/seedr_series.json")
@@ -317,28 +319,42 @@ def series_catalog():
 
         season, episode = extract_season_episode(f["name"])
 
-        # Only TV episodes
         if season is None:
             continue
 
-        title, year = extract_title_year(f["name"])
+        filename = f["name"]
 
-        normalized = normalize(title)
+        imdb_match = re.search(r"(tt\d{7,9})", filename)
 
-        if normalized in added:
+        if not imdb_match:
             continue
 
-        added.add(normalized)
+        imdb_id = imdb_match.group(1)
+
+        if imdb_id in added:
+            continue
+
+        added.add(imdb_id)
+
+        try:
+
+            series_title, year = get_meta("series", imdb_id)
+
+        except Exception as e:
+
+            print("CINEMETA ERROR:", e)
+
+            continue
 
         metas.append({
-            "id": normalized,
+            "id": imdb_id,
             "type": "series",
-            "name": title,
+            "name": series_title,
 
             "poster": f.get("thumb"),
             "posterShape": "poster",
 
-            "description": title
+            "description": series_title
         })
 
     print("SERIES CATALOG ITEMS:", len(metas))
@@ -366,22 +382,35 @@ def meta(type: str, id: str):
 
         if type == "series":
 
-            title, _ = extract_title_year(f["name"])
+            imdb_match = re.search(r"(tt\d{7,9})", f["name"])
 
-            if normalize(title) == normalize(id):
+            if not imdb_match:
+                continue
 
-                return {
-                    "meta": {
-                        "id": normalize(title),
-                        "type": "series",
-                        "name": title,
+            imdb_id = imdb_match.group(1)
 
-                        "poster": f.get("thumb"),
-                        "posterShape": "poster",
+            if imdb_id != id:
+                continue
 
-                        "description": title
-                    }
+            try:
+
+                series_title, year = get_meta("series", imdb_id)
+
+            except:
+                continue
+
+            return {
+                "meta": {
+                    "id": imdb_id,
+                    "type": "series",
+                    "name": series_title,
+
+                    "poster": f.get("thumb"),
+                    "posterShape": "poster",
+
+                    "description": series_title
                 }
+            }
 
         # ---------------------------------------------------
         # MOVIE META
@@ -474,10 +503,10 @@ def stream(type: str, id: str):
 
         if type == "series":
 
-            # Decode:
-            # tt8111088%3A1%3A3
+            # Example:
+            # tt8111088%3A1%3A1
             # ->
-            # tt8111088:1:3
+            # tt8111088:1:1
 
             decoded_id = unquote(id)
 
@@ -493,27 +522,30 @@ def stream(type: str, id: str):
             target_season = int(match.group(2))
             target_episode = int(match.group(3))
 
-            series_title, _ = get_meta("series", imdb_id)
-
-            normalized_series = normalize(series_title)
-
-            print("SERIES TITLE:", series_title)
-            print("TARGET SEASON:", target_season)
-            print("TARGET EPISODE:", target_episode)
+            print("IMDB ID:", imdb_id)
+            print("SEASON:", target_season)
+            print("EPISODE:", target_episode)
 
             for f in files:
 
                 if not f.get("is_video"):
                     continue
 
-                parsed_title, _ = extract_title_year(f["name"])
+                filename = f["name"]
 
-                season, episode = extract_season_episode(f["name"])
+                imdb_match = re.search(r"(tt\d{7,9})", filename)
 
-                if season is None:
+                if not imdb_match:
                     continue
 
-                if normalize(parsed_title) != normalized_series:
+                file_imdb_id = imdb_match.group(1)
+
+                if file_imdb_id != imdb_id:
+                    continue
+
+                season, episode = extract_season_episode(filename)
+
+                if season is None:
                     continue
 
                 if season != target_season:
@@ -522,7 +554,7 @@ def stream(type: str, id: str):
                 if episode != target_episode:
                     continue
 
-                print("MATCHED EPISODE:", f["name"])
+                print("MATCHED EPISODE:", filename)
 
                 try:
 
@@ -531,7 +563,7 @@ def stream(type: str, id: str):
                     if not direct_url:
                         continue
 
-                    quality = detect_quality(f["name"])
+                    quality = detect_quality(filename)
 
                     streams.append({
                         "name": "☁️ Seedr",
@@ -539,7 +571,7 @@ def stream(type: str, id: str):
                         "title": (
                             f"📺 S{season:02d}E{episode:02d}\n"
                             f"⚡ {quality}\n"
-                            f"📁 {f['name']}"
+                            f"📁 {filename}"
                         ),
 
                         "url": direct_url,
@@ -559,8 +591,6 @@ def stream(type: str, id: str):
         # ---------------------------------------------------
 
         elif type == "movie":
-
-            # IMDb Matching
 
             if id.startswith("tt"):
 
@@ -586,11 +616,9 @@ def stream(type: str, id: str):
                     if season is not None:
                         continue
 
-                    # Match title
                     if target_title not in normalized_file_title:
                         continue
 
-                    # Match year
                     if movie_year and parsed_year:
                         if movie_year != parsed_year:
                             continue
@@ -625,8 +653,6 @@ def stream(type: str, id: str):
 
                         print("STREAM ERROR:")
                         print(e)
-
-            # Personal Catalog Matching
 
             else:
 

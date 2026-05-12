@@ -222,7 +222,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "31.0.0",
+        "version": "32.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -264,41 +264,104 @@ def manifest():
 @app.get("/catalog/{type}/{id}.json")
 def catalog(type: str, id: str):
 
-    metas = []
-
     files = get_all_files()
 
-    for f in files:
+    # ---------------------------------------------------
+    # MOVIES
+    # ---------------------------------------------------
 
-        if not f.get("is_video"):
-            continue
+    if type == "movie":
 
-        filename = f["name"]
+        metas = []
 
-        series_file = is_series_file(filename)
+        for f in files:
 
-        # Movies only
-        if type == "movie" and series_file:
-            continue
+            if not f.get("is_video"):
+                continue
 
-        # Series only
-        if type == "series" and not series_file:
-            continue
+            if is_series_file(f["name"]):
+                continue
 
-        metas.append({
-            "id": normalize(filename),
-            "type": type,
-            "name": filename,
+            metas.append({
+                "id": normalize(f["name"]),
+                "type": "movie",
+                "name": f["name"],
 
-            "poster": f.get("thumb"),
-            "posterShape": "poster",
+                "poster": f.get("thumb"),
+                "posterShape": "poster",
 
-            "description": filename,
-        })
+                "description": f["name"]
+            })
 
-    print("CATALOG ITEMS:", len(metas))
+        return {"metas": metas}
 
-    return {"metas": metas}
+    # ---------------------------------------------------
+    # SERIES
+    # ---------------------------------------------------
+
+    elif type == "series":
+
+        series_map = {}
+
+        for f in files:
+
+            if not f.get("is_video"):
+                continue
+
+            filename = f["name"]
+
+            if not is_series_file(filename):
+                continue
+
+            season, episode = extract_season_episode(filename)
+
+            # Remove S01E01
+            series_name = re.sub(
+                r"[Ss]\d+[Ee]\d+",
+                "",
+                filename
+            )
+
+            # Remove 1x01
+            series_name = re.sub(
+                r"\d+x\d+",
+                "",
+                series_name
+            )
+
+            # Remove extensions
+            series_name = re.sub(
+                r"\.(mkv|mp4|avi|mov|webm|wmv).*",
+                "",
+                series_name,
+                flags=re.I
+            )
+
+            series_name = series_name.replace(".", " ")
+            series_name = series_name.replace("_", " ")
+
+            series_name = series_name.strip()
+
+            series_id = normalize(series_name)
+
+            if series_id not in series_map:
+
+                series_map[series_id] = {
+                    "id": series_id,
+                    "type": "series",
+                    "name": series_name,
+
+                    "poster": f.get("thumb"),
+                    "posterShape": "poster",
+
+                    "description": series_name
+                }
+
+        return {
+            "metas": list(series_map.values())
+        }
+
+    return {"metas": []}
 
 
 # ---------------------------------------------------
@@ -310,22 +373,111 @@ def meta(type: str, id: str):
 
     files = get_all_files()
 
-    for f in files:
+    # ---------------------------------------------------
+    # MOVIES
+    # ---------------------------------------------------
 
-        if normalize(id) == normalize(f["name"]):
+    if type == "movie":
 
-            return {
-                "meta": {
-                    "id": normalize(f["name"]),
-                    "type": type,
-                    "name": f["name"],
+        for f in files:
 
-                    "poster": f.get("thumb"),
-                    "posterShape": "poster",
+            if normalize(id) == normalize(f["name"]):
 
-                    "description": f["name"]
+                return {
+                    "meta": {
+                        "id": normalize(f["name"]),
+                        "type": "movie",
+                        "name": f["name"],
+
+                        "poster": f.get("thumb"),
+                        "posterShape": "poster",
+
+                        "description": f["name"]
+                    }
                 }
+
+    # ---------------------------------------------------
+    # SERIES
+    # ---------------------------------------------------
+
+    elif type == "series":
+
+        videos = []
+
+        series_name = None
+        poster = None
+
+        for f in files:
+
+            if not f.get("is_video"):
+                continue
+
+            filename = f["name"]
+
+            if not is_series_file(filename):
+                continue
+
+            season, episode = extract_season_episode(filename)
+
+            cleaned_name = re.sub(
+                r"[Ss]\d+[Ee]\d+",
+                "",
+                filename
+            )
+
+            cleaned_name = re.sub(
+                r"\d+x\d+",
+                "",
+                cleaned_name
+            )
+
+            cleaned_name = re.sub(
+                r"\.(mkv|mp4|avi|mov|webm|wmv).*",
+                "",
+                cleaned_name,
+                flags=re.I
+            )
+
+            cleaned_name = cleaned_name.replace(".", " ")
+            cleaned_name = cleaned_name.replace("_", " ")
+
+            cleaned_name = cleaned_name.strip()
+
+            if normalize(cleaned_name) != id:
+                continue
+
+            if not poster:
+                poster = f.get("thumb")
+
+            series_name = cleaned_name
+
+            videos.append({
+                "id": normalize(filename),
+                "title": f"S{season:02d}E{episode:02d}",
+                "season": season,
+                "episode": episode,
+
+                "released": "2024-01-01T00:00:00.000Z"
+            })
+
+        if not videos:
+            return {"meta": {}}
+
+        return {
+            "meta": {
+                "id": id,
+                "type": "series",
+                "name": series_name,
+
+                "poster": poster,
+                "posterShape": "poster",
+
+                "videos": sorted(
+                    videos,
+                    key=lambda x: (x["season"], x["episode"])
+                )
             }
+        }
 
     return {"meta": {}}
 
@@ -471,12 +623,6 @@ def stream(type: str, id: str):
                     continue
 
                 filename = f["name"]
-
-                if type == "series" and not is_series_file(filename):
-                    continue
-
-                if type == "movie" and is_series_file(filename):
-                    continue
 
                 if normalize(id) != normalize(filename):
                     continue

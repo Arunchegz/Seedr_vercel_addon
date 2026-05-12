@@ -58,21 +58,6 @@ def get_movie_title(imdb_id: str):
     return title, year
 
 
-def get_series_title(imdb_id: str):
-
-    url = f"https://v3-cinemeta.strem.io/meta/series/{imdb_id}.json"
-
-    r = requests.get(url, timeout=10)
-
-    r.raise_for_status()
-
-    data = r.json()
-
-    meta = data.get("meta", {})
-
-    return meta.get("name", "")
-
-
 def extract_title_year(filename: str):
 
     year_match = re.search(r"(19|20)\d{2}", filename)
@@ -80,6 +65,7 @@ def extract_title_year(filename: str):
     year = year_match.group(0) if year_match else ""
 
     title = re.sub(
+        r"\.(mkv|mp4|avi|mov|webm|wmv).*",
         r"\.(mkv|mp4|avi|mov|webm|wmv|srt).*",
         "",
         filename,
@@ -94,32 +80,6 @@ def extract_title_year(filename: str):
     title = title.strip()
 
     return title, year
-
-
-# ---------------------------------------------------
-# Detect season/episode
-# ---------------------------------------------------
-
-def extract_season_episode(filename):
-
-    match = re.search(r"[Ss](\d+)[Ee](\d+)", filename)
-
-    if match:
-        return int(match.group(1)), int(match.group(2))
-
-    match = re.search(r"(\d+)x(\d+)", filename)
-
-    if match:
-        return int(match.group(1)), int(match.group(2))
-
-    return None, None
-
-
-def is_series_file(filename):
-
-    season, episode = extract_season_episode(filename)
-
-    return season is not None
 
 
 # ---------------------------------------------------
@@ -215,20 +175,15 @@ def debug_files():
 
     for f in files:
 
-        season, episode = extract_season_episode(
-            f.get("name", "")
-        )
-
         result.append({
             "id": f.get("id"),
             "normalized_id": normalize(f.get("name", "")),
             "name": f.get("name"),
             "size": f.get("size"),
+            "is_video": f.get("play_video"),
+            "available": f.get("is_ready"),
             "is_video": f.get("is_video"),
             "thumb": f.get("thumb"),
-            "is_series": is_series_file(f.get("name", "")),
-            "season": season,
-            "episode": episode
         })
 
     return result
@@ -243,7 +198,8 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "33.0.0",
+        "version": "29.0.0",
+        "version": "30.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -255,8 +211,7 @@ def manifest():
         ],
 
         "types": [
-            "movie",
-            "series"
+            "movie"
         ],
 
         "idPrefixes": [
@@ -266,13 +221,8 @@ def manifest():
         "catalogs": [
             {
                 "type": "movie",
-                "id": "seedr_movies",
-                "name": "☁️ Seedr Movies"
-            },
-            {
-                "type": "series",
-                "id": "seedr_series",
-                "name": "☁️ Seedr Series"
+                "id": "seedr",
+                "name": "☁️ My Seedr Files"
             }
         ]
     }
@@ -282,105 +232,33 @@ def manifest():
 # Catalog
 # ---------------------------------------------------
 
-@app.get("/catalog/{type}/{id}.json")
-def catalog(type: str, id: str):
+@app.get("/catalog/movie/seedr.json")
+def catalog():
+
+    metas = []
 
     files = get_all_files()
 
-    # ---------------------------------------------------
-    # MOVIES
-    # ---------------------------------------------------
+    for f in files:
 
-    if type == "movie":
+        if not f.get("play_video"):
+        if not f.get("is_video"):
+            continue
 
-        metas = []
+        metas.append({
+            "id": normalize(f["name"]),
+            "type": "movie",
+            "name": f["name"],
 
-        for f in files:
+            "poster": f.get("thumb"),
+            "posterShape": "poster",
 
-            if not f.get("is_video"):
-                continue
+            "description": f["name"],
+        })
 
-            if is_series_file(f["name"]):
-                continue
+    print("CATALOG ITEMS:", len(metas))
 
-            metas.append({
-                "id": normalize(f["name"]),
-                "type": "movie",
-                "name": f["name"],
-
-                "poster": f.get("thumb"),
-                "posterShape": "poster",
-
-                "description": f["name"]
-            })
-
-        return {"metas": metas}
-
-    # ---------------------------------------------------
-    # SERIES
-    # ---------------------------------------------------
-
-    elif type == "series":
-
-        series_map = {}
-
-        for f in files:
-
-            if not f.get("is_video"):
-                continue
-
-            filename = f["name"]
-
-            if not is_series_file(filename):
-                continue
-
-            # Remove S01E01
-            series_name = re.sub(
-                r"[Ss]\d+[Ee]\d+",
-                "",
-                filename
-            )
-
-            # Remove 1x01
-            series_name = re.sub(
-                r"\d+x\d+",
-                "",
-                series_name
-            )
-
-            # Remove extensions
-            series_name = re.sub(
-                r"\.(mkv|mp4|avi|mov|webm|wmv).*",
-                "",
-                series_name,
-                flags=re.I
-            )
-
-            series_name = series_name.replace(".", " ")
-            series_name = series_name.replace("_", " ")
-
-            series_name = series_name.strip()
-
-            series_id = normalize(series_name)
-
-            if series_id not in series_map:
-
-                series_map[series_id] = {
-                    "id": series_id,
-                    "type": "series",
-                    "name": series_name,
-
-                    "poster": f.get("thumb"),
-                    "posterShape": "poster",
-
-                    "description": series_name
-                }
-
-        return {
-            "metas": list(series_map.values())
-        }
-
-    return {"metas": []}
+    return {"metas": metas}
 
 
 # ---------------------------------------------------
@@ -392,110 +270,22 @@ def meta(type: str, id: str):
 
     files = get_all_files()
 
-    # ---------------------------------------------------
-    # MOVIES
-    # ---------------------------------------------------
+    for f in files:
 
-    if type == "movie":
+        if normalize(id) == normalize(f["name"]):
 
-        for f in files:
+            return {
+                "meta": {
+                    "id": normalize(f["name"]),
+                    "type": "movie",
+                    "name": f["name"],
 
-            if normalize(id) == normalize(f["name"]):
+                    "poster": f.get("thumb"),
+                    "posterShape": "poster",
 
-                return {
-                    "meta": {
-                        "id": normalize(f["name"]),
-                        "type": "movie",
-                        "name": f["name"],
-
-                        "poster": f.get("thumb"),
-                        "posterShape": "poster",
-
-                        "description": f["name"]
-                    }
+                    "description": f["name"]
                 }
-
-    # ---------------------------------------------------
-    # SERIES
-    # ---------------------------------------------------
-
-    elif type == "series":
-
-        videos = []
-
-        series_name = None
-        poster = None
-
-        for f in files:
-
-            if not f.get("is_video"):
-                continue
-
-            filename = f["name"]
-
-            if not is_series_file(filename):
-                continue
-
-            season, episode = extract_season_episode(filename)
-
-            cleaned_name = re.sub(
-                r"[Ss]\d+[Ee]\d+",
-                "",
-                filename
-            )
-
-            cleaned_name = re.sub(
-                r"\d+x\d+",
-                "",
-                cleaned_name
-            )
-
-            cleaned_name = re.sub(
-                r"\.(mkv|mp4|avi|mov|webm|wmv).*",
-                "",
-                cleaned_name,
-                flags=re.I
-            )
-
-            cleaned_name = cleaned_name.replace(".", " ")
-            cleaned_name = cleaned_name.replace("_", " ")
-
-            cleaned_name = cleaned_name.strip()
-
-            if normalize(cleaned_name) != id:
-                continue
-
-            if not poster:
-                poster = f.get("thumb")
-
-            series_name = cleaned_name
-
-            videos.append({
-                "id": normalize(filename),
-                "title": f"S{season:02d}E{episode:02d}",
-                "season": season,
-                "episode": episode,
-                "released": "2024-01-01T00:00:00.000Z"
-            })
-
-        if not videos:
-            return {"meta": {}}
-
-        return {
-            "meta": {
-                "id": id,
-                "type": "series",
-                "name": series_name,
-
-                "poster": poster,
-                "posterShape": "poster",
-
-                "videos": sorted(
-                    videos,
-                    key=lambda x: (x["season"], x["episode"])
-                )
             }
-        }
 
     return {"meta": {}}
 
@@ -512,6 +302,11 @@ def get_seedr_download_url(file_id):
         timeout=15
     )
 
+    print("DOWNLOAD STATUS:")
+    print(response.status_code)
+
+    print("DOWNLOAD RESPONSE:")
+    print(response.text)
     print("DOWNLOAD STATUS:", response.status_code)
     print("DOWNLOAD RESPONSE:", response.text)
 
@@ -557,7 +352,7 @@ def stream(type: str, id: str):
 
     streams = []
 
-    if type not in ["movie", "series"]:
+    if type != "movie":
         return {"streams": []}
 
     try:
@@ -565,146 +360,99 @@ def stream(type: str, id: str):
         files = get_all_files()
 
         # ---------------------------------------------------
-        # MOVIES
+        # IMDb Movie Page Matching
+        # IMDb Matching
         # ---------------------------------------------------
 
-        if type == "movie":
+        if id.startswith("tt"):
 
-            if id.startswith("tt"):
+            movie_title, movie_year = get_movie_title(id)
 
-                movie_title, movie_year = get_movie_title(id)
+            print("MOVIE TITLE:", movie_title)
+            print("MOVIE YEAR:", movie_year)
 
-                print("MOVIE TITLE:", movie_title)
-                print("MOVIE YEAR:", movie_year)
-
-                target_title = normalize(movie_title)
-
-                for f in files:
-
-                    if not f.get("is_video"):
-                        continue
-
-                    if is_series_file(f["name"]):
-                        continue
-
-                    parsed_title, parsed_year = extract_title_year(
-                        f["name"]
-                    )
-
-                    normalized_file_title = normalize(parsed_title)
-
-                    if target_title not in normalized_file_title:
-                        continue
-
-                    if movie_year and parsed_year:
-                        if movie_year != parsed_year:
-                            continue
-
-                    try:
-
-                        direct_url = get_seedr_download_url(
-                            f["id"]
-                        )
-
-                        if not direct_url:
-                            continue
-
-                        quality = detect_quality(f["name"])
-
-                        streams.append({
-                            "name": "☁️ Seedr",
-
-                            "title": (
-                                f"⚡ {quality}\n"
-                                f"📁 {f['name']}"
-                            ),
-
-                            "url": direct_url,
-
-                            "behaviorHints": {
-                                "notWebReady": False
-                            }
-                        })
-
-                    except Exception as e:
-
-                        print("STREAM ERROR:")
-                        print(e)
-
-        # ---------------------------------------------------
-        # SERIES
-        # ---------------------------------------------------
-
-        elif type == "series":
-
-            # Example:
-            # tt8111088:1:1
-
-            parts = id.split(":")
-
-            if len(parts) < 3:
-                return {"streams": []}
-
-            imdb_id = parts[0]
-
-            try:
-                target_season = int(parts[1])
-                target_episode = int(parts[2])
-
-            except:
-                return {"streams": []}
-
-            series_title = get_series_title(imdb_id)
-
-            normalized_series = normalize(series_title)
-
-            print("SERIES:", series_title)
-            print("SEASON:", target_season)
-            print("EPISODE:", target_episode)
+            target_title = normalize(movie_title)
 
             for f in files:
 
+                if not f.get("play_video"):
                 if not f.get("is_video"):
                     continue
 
-                filename = f["name"]
+                parsed_title, parsed_year = extract_title_year(f["name"])
 
-                if not is_series_file(filename):
+                normalized_file_title = normalize(parsed_title)
+
+                # Match title
+                if target_title not in normalized_file_title:
                     continue
 
-                season, episode = extract_season_episode(
-                    filename
-                )
+                # Match year
+                if movie_year and parsed_year:
+                    if movie_year != parsed_year:
+                        continue
 
-                if season != target_season:
-                    continue
-
-                if episode != target_episode:
-                    continue
-
-                normalized_filename = normalize(filename)
-
-                if normalized_series not in normalized_filename:
-                    continue
+                print("MATCHED:", f["name"])
 
                 try:
 
-                    direct_url = get_seedr_download_url(
-                        f["id"]
-                    )
+                    direct_url = get_seedr_download_url(f["id"])
 
                     if not direct_url:
                         continue
 
-                    quality = detect_quality(filename)
+                    quality = detect_quality(f["name"])
 
                     streams.append({
                         "name": "☁️ Seedr",
 
                         "title": (
                             f"⚡ {quality}\n"
-                            f"📺 S{season:02d}E{episode:02d}\n"
-                            f"📁 {filename}"
+                            f"📁 {f['name']}"
+                        ),
+
+                        "url": direct_url,
+
+                        "behaviorHints": {
+                            "notWebReady": False
+                        }
+                    })
+
+                except Exception as e:
+
+                    print("STREAM ERROR:")
+                    print(e)
+
+        # ---------------------------------------------------
+        # Personal Catalog Matching
+        # ---------------------------------------------------
+
+        else:
+
+            for f in files:
+
+                if not f.get("play_video"):
+                if not f.get("is_video"):
+                    continue
+
+                if normalize(id) != normalize(f["name"]):
+                    continue
+
+                try:
+
+                    direct_url = get_seedr_download_url(f["id"])
+
+                    if not direct_url:
+                        continue
+
+                    quality = detect_quality(f["name"])
+
+                    streams.append({
+                        "name": "☁️ Seedr",
+
+                        "title": (
+                            f"⚡ {quality}\n"
+                            f"📁 {f['name']}"
                         ),
 
                         "url": direct_url,

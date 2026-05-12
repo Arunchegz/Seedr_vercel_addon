@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import os
 import re
-
+import requests
 
 from urllib.parse import unquote
 

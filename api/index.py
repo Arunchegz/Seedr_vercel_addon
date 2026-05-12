@@ -222,7 +222,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "31.0.0",
+        "version": "32.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -245,7 +245,7 @@ def manifest():
         "catalogs": [
             {
                 "type": "movie",
-                "id": "seedr_movies",
+                "id": "seedr",
                 "name": "☁️ Seedr Movies"
             },
             {
@@ -258,10 +258,12 @@ def manifest():
 
 
 # ---------------------------------------------------
-# Movie Catalog
+# MOVIE CATALOG
+# IMPORTANT:
+# Keep route as /catalog/movie/seedr.json
 # ---------------------------------------------------
 
-@app.get("/catalog/movie/seedr_movies.json")
+@app.get("/catalog/movie/seedr.json")
 def movie_catalog():
 
     metas = []
@@ -296,7 +298,7 @@ def movie_catalog():
 
 
 # ---------------------------------------------------
-# Series Catalog
+# SERIES CATALOG
 # ---------------------------------------------------
 
 @app.get("/catalog/series/seedr_series.json")
@@ -315,7 +317,7 @@ def series_catalog():
 
         season, episode = extract_season_episode(f["name"])
 
-        # Only series episodes
+        # Only TV episodes
         if season is None:
             continue
 
@@ -345,7 +347,7 @@ def series_catalog():
 
 
 # ---------------------------------------------------
-# Meta
+# META
 # ---------------------------------------------------
 
 @app.get("/meta/{type}/{id}.json")
@@ -357,6 +359,10 @@ def meta(type: str, id: str):
 
         if not f.get("is_video"):
             continue
+
+        # ---------------------------------------------------
+        # SERIES META
+        # ---------------------------------------------------
 
         if type == "series":
 
@@ -376,6 +382,10 @@ def meta(type: str, id: str):
                         "description": title
                     }
                 }
+
+        # ---------------------------------------------------
+        # MOVIE META
+        # ---------------------------------------------------
 
         else:
 
@@ -446,7 +456,7 @@ def detect_quality(filename):
 
 
 # ---------------------------------------------------
-# Stream
+# STREAM
 # ---------------------------------------------------
 
 @app.get("/stream/{type}/{id}.json")

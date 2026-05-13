@@ -222,7 +222,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "32.0.0",
+        "version": "33.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -259,8 +259,6 @@ def manifest():
 
 # ---------------------------------------------------
 # MOVIE CATALOG
-# IMPORTANT:
-# Keep route as /catalog/movie/seedr.json
 # ---------------------------------------------------
 
 @app.get("/catalog/movie/seedr.json")
@@ -355,39 +353,80 @@ def meta(type: str, id: str):
 
     files = get_all_files()
 
-    for f in files:
+    # ---------------------------------------------------
+    # SERIES META
+    # ---------------------------------------------------
 
-        if not f.get("is_video"):
-            continue
+    if type == "series":
 
-        # ---------------------------------------------------
-        # SERIES META
-        # ---------------------------------------------------
+        videos = []
 
-        if type == "series":
+        poster = None
+        title_name = None
 
-            title, _ = extract_title_year(f["name"])
+        for f in files:
 
-            if normalize(title) == normalize(id):
+            if not f.get("is_video"):
+                continue
 
-                return {
-                    "meta": {
-                        "id": normalize(title),
-                        "type": "series",
-                        "name": title,
+            parsed_title, _ = extract_title_year(f["name"])
 
-                        "poster": f.get("thumb"),
-                        "posterShape": "poster",
+            season, episode = extract_season_episode(f["name"])
 
-                        "description": title
-                    }
+            if season is None:
+                continue
+
+            if normalize(parsed_title) != normalize(id):
+                continue
+
+            if not poster:
+                poster = f.get("thumb")
+
+            title_name = parsed_title
+
+            videos.append({
+                "id": f"{normalize(parsed_title)}:{season}:{episode}",
+
+                "title": f"S{season:02d}E{episode:02d}",
+
+                "season": season,
+                "episode": episode,
+
+                "released": "2024-01-01T00:00:00.000Z"
+            })
+
+        # Sort episodes
+        videos.sort(key=lambda x: (x["season"], x["episode"]))
+
+        if title_name:
+
+            return {
+                "meta": {
+                    "id": normalize(title_name),
+                    "type": "series",
+                    "name": title_name,
+
+                    "poster": poster,
+                    "posterShape": "poster",
+
+                    "description": title_name,
+
+                    "videos": videos
                 }
+            }
 
-        # ---------------------------------------------------
-        # MOVIE META
-        # ---------------------------------------------------
+        return {"meta": {}}
 
-        else:
+    # ---------------------------------------------------
+    # MOVIE META
+    # ---------------------------------------------------
+
+    else:
+
+        for f in files:
+
+            if not f.get("is_video"):
+                continue
 
             if normalize(id) == normalize(f["name"]):
 
@@ -474,30 +513,23 @@ def stream(type: str, id: str):
 
         if type == "series":
 
-            # Decode:
-            # tt8111088%3A1%3A3
-            # ->
-            # tt8111088:1:3
-
             decoded_id = unquote(id)
 
             print("DECODED ID:", decoded_id)
 
-            match = re.match(r"(tt\d+):(\d+):(\d+)", decoded_id)
+            match = re.match(r"(.+):(\d+):(\d+)", decoded_id)
 
             if not match:
                 return {"streams": []}
 
-            imdb_id = match.group(1)
+            series_id = match.group(1)
 
             target_season = int(match.group(2))
             target_episode = int(match.group(3))
 
-            series_title, _ = get_meta("series", imdb_id)
+            normalized_series = normalize(series_id)
 
-            normalized_series = normalize(series_title)
-
-            print("SERIES TITLE:", series_title)
+            print("SERIES:", normalized_series)
             print("TARGET SEASON:", target_season)
             print("TARGET EPISODE:", target_episode)
 

@@ -241,7 +241,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "35.0.0",
+        "version": "36.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -257,7 +257,6 @@ def manifest():
             "series"
         ],
 
-        # IMPORTANT
         "idPrefixes": [
             "tt",
             "seedr",
@@ -407,43 +406,109 @@ def meta(type: str, id: str):
 
     files = get_all_files()
 
-    for f in files:
+    # ---------------------------------------------------
+    # SERIES META
+    # ---------------------------------------------------
 
-        if not f.get("is_video"):
-            continue
+    if type == "series":
 
-        # ---------------------------------------------------
-        # SERIES META
-        # ---------------------------------------------------
+        clean_id = id.replace("seedrseries:", "")
 
-        if type == "series":
+        episodes = []
 
-            title, _ = extract_title_year(f["name"])
+        series_name = None
 
-            normalized = normalize(title)
+        added = set()
 
-            clean_id = id.replace("seedrseries:", "")
+        for f in files:
 
-            if normalized == normalize(clean_id):
+            if not f.get("is_video"):
+                continue
 
-                return {
-                    "meta": {
-                        "id": f"seedrseries:{normalized}",
-                        "type": "series",
-                        "name": title,
+            parsed_title, _ = extract_title_year(
+                f["name"]
+            )
 
-                        "poster": f.get("thumb"),
-                        "posterShape": "poster",
+            normalized = normalize(parsed_title)
 
-                        "description": title
-                    }
+            if normalized != normalize(clean_id):
+                continue
+
+            season, episode = extract_season_episode(
+                f["name"]
+            )
+
+            if season is None:
+                continue
+
+            series_name = parsed_title
+
+            key = f"{season}-{episode}"
+
+            if key in added:
+                continue
+
+            added.add(key)
+
+            episodes.append({
+                "id": (
+                    f"seedrseries:{normalized}:"
+                    f"{season}:{episode}"
+                ),
+
+                "title": (
+                    f"S{season:02d}E{episode:02d}"
+                ),
+
+                "season": season,
+
+                "episode": episode,
+
+                "released": "2024-01-01T00:00:00.000Z"
+            })
+
+        # Sort episodes
+        episodes.sort(
+            key=lambda x: (
+                x["season"],
+                x["episode"]
+            )
+        )
+
+        if episodes:
+
+            return {
+                "meta": {
+                    "id": f"seedrseries:{clean_id}",
+
+                    "type": "series",
+
+                    "name": series_name,
+
+                    "poster": (
+                        "https://www.seedr.cc/"
+                        "images/seedr-logo.png"
+                    ),
+
+                    "posterShape": "poster",
+
+                    "description": series_name,
+
+                    # IMPORTANT
+                    "videos": episodes
                 }
+            }
 
-        # ---------------------------------------------------
-        # MOVIE META
-        # ---------------------------------------------------
+    # ---------------------------------------------------
+    # MOVIE META
+    # ---------------------------------------------------
 
-        else:
+    else:
+
+        for f in files:
+
+            if not f.get("is_video"):
+                continue
 
             if normalize(id) == normalize(f["name"]):
 
@@ -534,7 +599,7 @@ def stream(type: str, id: str):
             print("DECODED ID:", decoded_id)
 
             match = re.match(
-                r"(tt\d+|seedrseries:[^:]+):(\d+):(\d+)",
+                r"(seedrseries:[^:]+):(\d+):(\d+)",
                 decoded_id
             )
 
@@ -547,13 +612,8 @@ def stream(type: str, id: str):
 
             target_episode = int(match.group(3))
 
-            # IMDb Discover
-            if series_id.startswith("tt"):
-
-                series_title, _ = get_meta("series", series_id)
-
             # Local catalog
-            else:
+            if series_id.startswith("seedrseries:"):
 
                 series_title = series_id.replace(
                     "seedrseries:",
@@ -576,14 +636,21 @@ def stream(type: str, id: str):
                 if not f.get("is_video"):
                     continue
 
-                parsed_title, _ = extract_title_year(f["name"])
+                parsed_title, _ = extract_title_year(
+                    f["name"]
+                )
 
-                season, episode = extract_season_episode(f["name"])
+                season, episode = extract_season_episode(
+                    f["name"]
+                )
 
                 if season is None:
                     continue
 
-                if not flexible_match(series_title, parsed_title):
+                if not flexible_match(
+                    series_title,
+                    parsed_title
+                ):
                     continue
 
                 if season != target_season:
@@ -596,12 +663,16 @@ def stream(type: str, id: str):
 
                 try:
 
-                    direct_url = get_seedr_download_url(f["id"])
+                    direct_url = get_seedr_download_url(
+                        f["id"]
+                    )
 
                     if not direct_url:
                         continue
 
-                    quality = detect_quality(f["name"])
+                    quality = detect_quality(
+                        f["name"]
+                    )
 
                     streams.append({
                         "name": "☁️ Seedr",
@@ -632,7 +703,10 @@ def stream(type: str, id: str):
             # IMDb Matching
             if id.startswith("tt"):
 
-                movie_title, movie_year = get_meta("movie", id)
+                movie_title, movie_year = get_meta(
+                    "movie",
+                    id
+                )
 
                 print("MOVIE TITLE:", movie_title)
 

@@ -95,11 +95,12 @@ def extract_title_year(filename: str):
 
     title = re.sub(r"(19|20)\d{2}", "", title)
 
-    # Remove episode tags
     title = re.sub(r"S\d{1,2}E\d{1,2}.*", "", title, flags=re.I)
+
     title = re.sub(r"\d{1,2}x\d{1,2}.*", "", title, flags=re.I)
 
     title = title.replace(".", " ")
+
     title = title.replace("_", " ")
 
     title = title.strip()
@@ -240,7 +241,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "33.0.0",
+        "version": "35.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -256,8 +257,11 @@ def manifest():
             "series"
         ],
 
+        # IMPORTANT
         "idPrefixes": [
-            "tt"
+            "tt",
+            "seedr",
+            "seedrseries"
         ],
 
         "catalogs": [
@@ -345,7 +349,7 @@ def series_catalog():
         added.add(normalized)
 
         metas.append({
-            "id": normalized,
+            "id": f"seedrseries:{normalized}",
             "type": "series",
             "name": title,
 
@@ -365,7 +369,12 @@ def series_catalog():
 @app.get("/meta/{type}/{id}.json")
 def meta(type: str, id: str):
 
-    # IMDb Meta Support
+    print("META REQUEST:", type, id)
+
+    # ---------------------------------------------------
+    # IMDb Discover Support
+    # ---------------------------------------------------
+
     if id.startswith("tt"):
 
         try:
@@ -378,8 +387,10 @@ def meta(type: str, id: str):
                     "type": type,
                     "name": title,
                     "year": year,
+
                     "poster": "https://www.seedr.cc/images/seedr-logo.png",
                     "posterShape": "poster",
+
                     "description": title
                 }
             }
@@ -387,6 +398,12 @@ def meta(type: str, id: str):
         except Exception as e:
 
             print("IMDb META ERROR:", e)
+
+            return {"meta": {}}
+
+    # ---------------------------------------------------
+    # Local Catalog Support
+    # ---------------------------------------------------
 
     files = get_all_files()
 
@@ -403,11 +420,15 @@ def meta(type: str, id: str):
 
             title, _ = extract_title_year(f["name"])
 
-            if normalize(title) == normalize(id):
+            normalized = normalize(title)
+
+            clean_id = id.replace("seedrseries:", "")
+
+            if normalized == normalize(clean_id):
 
                 return {
                     "meta": {
-                        "id": normalize(title),
+                        "id": f"seedrseries:{normalized}",
                         "type": "series",
                         "name": title,
 
@@ -512,19 +533,43 @@ def stream(type: str, id: str):
 
             print("DECODED ID:", decoded_id)
 
-            match = re.match(r"(tt\d+):(\d+):(\d+)", decoded_id)
+            match = re.match(
+                r"(tt\d+|seedrseries:[^:]+):(\d+):(\d+)",
+                decoded_id
+            )
 
             if not match:
                 return {"streams": []}
 
-            imdb_id = match.group(1)
+            series_id = match.group(1)
 
             target_season = int(match.group(2))
+
             target_episode = int(match.group(3))
 
-            series_title, _ = get_meta("series", imdb_id)
+            # IMDb Discover
+            if series_id.startswith("tt"):
+
+                series_title, _ = get_meta("series", series_id)
+
+            # Local catalog
+            else:
+
+                series_title = series_id.replace(
+                    "seedrseries:",
+                    ""
+                )
+
+                series_title = series_title.replace(
+                    ".",
+                    " "
+                )
 
             print("SERIES TITLE:", series_title)
+
+            print("TARGET SEASON:", target_season)
+
+            print("TARGET EPISODE:", target_episode)
 
             for f in files:
 
@@ -590,6 +635,7 @@ def stream(type: str, id: str):
                 movie_title, movie_year = get_meta("movie", id)
 
                 print("MOVIE TITLE:", movie_title)
+
                 print("MOVIE YEAR:", movie_year)
 
                 for f in files:
@@ -597,16 +643,23 @@ def stream(type: str, id: str):
                     if not f.get("is_video"):
                         continue
 
-                    parsed_title, parsed_year = extract_title_year(f["name"])
+                    parsed_title, parsed_year = extract_title_year(
+                        f["name"]
+                    )
 
                     # Skip TV episodes
-                    season, episode = extract_season_episode(f["name"])
+                    season, episode = extract_season_episode(
+                        f["name"]
+                    )
 
                     if season is not None:
                         continue
 
                     # Flexible title matching
-                    if not flexible_match(movie_title, parsed_title):
+                    if not flexible_match(
+                        movie_title,
+                        parsed_title
+                    ):
                         continue
 
                     # Match year
@@ -619,12 +672,16 @@ def stream(type: str, id: str):
 
                     try:
 
-                        direct_url = get_seedr_download_url(f["id"])
+                        direct_url = get_seedr_download_url(
+                            f["id"]
+                        )
 
                         if not direct_url:
                             continue
 
-                        quality = detect_quality(f["name"])
+                        quality = detect_quality(
+                            f["name"]
+                        )
 
                         streams.append({
                             "name": "☁️ Seedr",
@@ -658,12 +715,16 @@ def stream(type: str, id: str):
 
                     try:
 
-                        direct_url = get_seedr_download_url(f["id"])
+                        direct_url = get_seedr_download_url(
+                            f["id"]
+                        )
 
                         if not direct_url:
                             continue
 
-                        quality = detect_quality(f["name"])
+                        quality = detect_quality(
+                            f["name"]
+                        )
 
                         streams.append({
                             "name": "☁️ Seedr",

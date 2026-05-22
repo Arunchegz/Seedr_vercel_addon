@@ -38,7 +38,27 @@ HEADERS = {
 # ---------------------------------------------------
 
 def normalize(text: str):
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    text = text.lower()
+
+    text = re.sub(r"[^a-z0-9 ]", " ", text)
+
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def flexible_match(title: str, filename: str):
+
+    title_n = normalize(title)
+
+    file_n = normalize(filename)
+
+    words = title_n.split()
+
+    matched = sum(1 for w in words if w in file_n)
+
+    required = max(2, len(words) // 2)
+
+    return matched >= required
 
 
 def get_meta(type_name: str, imdb_id: str):
@@ -117,7 +137,6 @@ def list_root_contents():
     )
 
     print("ROOT STATUS:", response.status_code)
-    print("ROOT RESPONSE:", response.text)
 
     response.raise_for_status()
 
@@ -133,7 +152,6 @@ def list_folder_contents(folder_id):
     )
 
     print("FOLDER STATUS:", response.status_code)
-    print("FOLDER RESPONSE:", response.text)
 
     response.raise_for_status()
 
@@ -222,7 +240,7 @@ def manifest():
 
     return {
         "id": "org.seedrcc.stremio",
-        "version": "32.0.0",
+        "version": "33.0.0",
         "name": "☁️ Seedr",
 
         "description": "Stream your Seedr files in Stremio",
@@ -259,8 +277,6 @@ def manifest():
 
 # ---------------------------------------------------
 # MOVIE CATALOG
-# IMPORTANT:
-# Keep route as /catalog/movie/seedr.json
 # ---------------------------------------------------
 
 @app.get("/catalog/movie/seedr.json")
@@ -291,8 +307,6 @@ def movie_catalog():
 
             "description": f["name"],
         })
-
-    print("MOVIE CATALOG ITEMS:", len(metas))
 
     return {"metas": metas}
 
@@ -341,8 +355,6 @@ def series_catalog():
             "description": title
         })
 
-    print("SERIES CATALOG ITEMS:", len(metas))
-
     return {"metas": metas}
 
 
@@ -352,6 +364,29 @@ def series_catalog():
 
 @app.get("/meta/{type}/{id}.json")
 def meta(type: str, id: str):
+
+    # IMDb Meta Support
+    if id.startswith("tt"):
+
+        try:
+
+            title, year = get_meta(type, id)
+
+            return {
+                "meta": {
+                    "id": id,
+                    "type": type,
+                    "name": title,
+                    "year": year,
+                    "poster": "https://www.seedr.cc/images/seedr-logo.png",
+                    "posterShape": "poster",
+                    "description": title
+                }
+            }
+
+        except Exception as e:
+
+            print("IMDb META ERROR:", e)
 
     files = get_all_files()
 
@@ -420,7 +455,6 @@ def get_seedr_download_url(file_id):
     )
 
     print("DOWNLOAD STATUS:", response.status_code)
-    print("DOWNLOAD RESPONSE:", response.text)
 
     response.raise_for_status()
 
@@ -474,11 +508,6 @@ def stream(type: str, id: str):
 
         if type == "series":
 
-            # Decode:
-            # tt8111088%3A1%3A3
-            # ->
-            # tt8111088:1:3
-
             decoded_id = unquote(id)
 
             print("DECODED ID:", decoded_id)
@@ -495,11 +524,7 @@ def stream(type: str, id: str):
 
             series_title, _ = get_meta("series", imdb_id)
 
-            normalized_series = normalize(series_title)
-
             print("SERIES TITLE:", series_title)
-            print("TARGET SEASON:", target_season)
-            print("TARGET EPISODE:", target_episode)
 
             for f in files:
 
@@ -513,7 +538,7 @@ def stream(type: str, id: str):
                 if season is None:
                     continue
 
-                if normalize(parsed_title) != normalized_series:
+                if not flexible_match(series_title, parsed_title):
                     continue
 
                 if season != target_season:
@@ -551,8 +576,7 @@ def stream(type: str, id: str):
 
                 except Exception as e:
 
-                    print("STREAM ERROR:")
-                    print(e)
+                    print("STREAM ERROR:", e)
 
         # ---------------------------------------------------
         # MOVIE STREAMS
@@ -561,15 +585,12 @@ def stream(type: str, id: str):
         elif type == "movie":
 
             # IMDb Matching
-
             if id.startswith("tt"):
 
                 movie_title, movie_year = get_meta("movie", id)
 
                 print("MOVIE TITLE:", movie_title)
                 print("MOVIE YEAR:", movie_year)
-
-                target_title = normalize(movie_title)
 
                 for f in files:
 
@@ -578,20 +599,19 @@ def stream(type: str, id: str):
 
                     parsed_title, parsed_year = extract_title_year(f["name"])
 
-                    normalized_file_title = normalize(parsed_title)
-
                     # Skip TV episodes
                     season, episode = extract_season_episode(f["name"])
 
                     if season is not None:
                         continue
 
-                    # Match title
-                    if target_title not in normalized_file_title:
+                    # Flexible title matching
+                    if not flexible_match(movie_title, parsed_title):
                         continue
 
                     # Match year
                     if movie_year and parsed_year:
+
                         if movie_year != parsed_year:
                             continue
 
@@ -623,11 +643,9 @@ def stream(type: str, id: str):
 
                     except Exception as e:
 
-                        print("STREAM ERROR:")
-                        print(e)
+                        print("STREAM ERROR:", e)
 
             # Personal Catalog Matching
-
             else:
 
                 for f in files:
@@ -664,13 +682,11 @@ def stream(type: str, id: str):
 
                     except Exception as e:
 
-                        print("STREAM ERROR:")
-                        print(e)
+                        print("STREAM ERROR:", e)
 
     except Exception as e:
 
-        print("MAIN STREAM ERROR:")
-        print(e)
+        print("MAIN STREAM ERROR:", e)
 
     print("TOTAL STREAMS:", len(streams))
 

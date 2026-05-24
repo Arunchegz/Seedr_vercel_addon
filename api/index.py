@@ -47,16 +47,19 @@ def normalize(text: str):
 
 
 def flexible_match(title: str, filename: str):
-
     title_n = normalize(title)
-
     file_n = normalize(filename)
-
     words = title_n.split()
+    
+    if not words:
+        return False
 
     matched = sum(1 for w in words if w in file_n)
 
-    required = max(2, len(words) // 2)
+    if len(words) <= 2:
+        required = len(words)
+    else:
+        required = max(2, len(words) // 2)
 
     return matched >= required
 

@@ -46,7 +46,7 @@ def normalize(text: str):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def flexible_match(title: str, filename: str):
+ddef flexible_match(title: str, filename: str):
     title_n = normalize(title)
     file_n = normalize(filename)
     
@@ -72,7 +72,6 @@ def flexible_match(title: str, filename: str):
         required = max(2, len(core_words) // 2)
 
     return matched >= required
-
 
 def get_meta(type_name: str, imdb_id: str):
 
@@ -299,9 +298,11 @@ def manifest():
 def movie_catalog():
 
     metas = []
+
     files = get_all_files()
 
     for f in files:
+
         if not f.get("is_video"):
             continue
 
@@ -312,16 +313,19 @@ def movie_catalog():
             continue
 
         metas.append({
-            # ADDED 'seedr:' PREFIX HERE
-            "id": f"seedr:{normalize(f['name'])}", 
+            "id": normalize(f["name"]),
             "type": "movie",
             "name": f["name"],
+
             "poster": f.get("thumb"),
             "posterShape": "poster",
+
             "description": f["name"],
         })
 
     return {"metas": metas}
+
+
 # ---------------------------------------------------
 # SERIES CATALOG
 # ---------------------------------------------------
@@ -507,32 +511,33 @@ def meta(type: str, id: str):
                 }
             }
 
-# ---------------------------------------------------
-# MOVIE META (Inside the @app.get("/meta/{type}/{id}.json") endpoint)
-# ---------------------------------------------------
+    # ---------------------------------------------------
+    # MOVIE META
+    # ---------------------------------------------------
 
     else:
-        # STRIP THE PREFIX FOR LOOKUP
-        clean_id = id.replace("seedr:", "") if id.startswith("seedr:") else id
 
         for f in files:
+
             if not f.get("is_video"):
                 continue
 
-            # COMPARE WITH CLEAN ID
-            if normalize(clean_id) == normalize(f["name"]):
+            if normalize(id) == normalize(f["name"]):
 
                 return {
                     "meta": {
-                        # RETURN WITH PREFIX
-                        "id": f"seedr:{normalize(f['name'])}", 
+                        "id": normalize(f["name"]),
                         "type": "movie",
                         "name": f["name"],
+
                         "poster": f.get("thumb"),
                         "posterShape": "poster",
+
                         "description": f["name"]
                     }
                 }
+
+    return {"meta": {}}
 
 
 # ---------------------------------------------------
@@ -701,68 +706,129 @@ def stream(type: str, id: str):
 
                     print("STREAM ERROR:", e)
 
-# ---------------------------------------------------
-# MOVIE STREAMS (Inside the @app.get("/stream/{type}/{id}.json") endpoint)
-# ---------------------------------------------------
+        # ---------------------------------------------------
+        # MOVIE STREAMS
+        # ---------------------------------------------------
 
         elif type == "movie":
 
-    # IMDb Matching
+            # IMDb Matching
             if id.startswith("tt"):
-                
-                # Safely fetch from Cinemeta
-                try:
-                    movie_title, movie_year = get_meta("movie", id)
-                except Exception as e:
-                    print(f"Cinemeta fetch failed for {id}:", e)
-                    continue
+
+                movie_title, movie_year = get_meta(
+                    "movie",
+                    id
+                )
 
                 print("MOVIE TITLE:", movie_title)
+
                 print("MOVIE YEAR:", movie_year)
 
                 for f in files:
+
                     if not f.get("is_video"):
                         continue
 
-                    parsed_title, parsed_year = extract_title_year(f["name"])
+                    parsed_title, parsed_year = extract_title_year(
+                        f["name"]
+                    )
 
                     # Skip TV episodes
-                    season, episode = extract_season_episode(f["name"])
+                    season, episode = extract_season_episode(
+                        f["name"]
+                    )
+
                     if season is not None:
                         continue
 
                     # Flexible title matching
-                    if not flexible_match(movie_title, parsed_title):
+                    if not flexible_match(
+                        movie_title,
+                        parsed_title
+                    ):
                         continue
 
-                    # RELAXED YEAR MATCH (Allows +/- 2 years discrepancy)
+                    # Match year
                     if movie_year and parsed_year:
-                        try:
-                            if abs(int(movie_year) - int(parsed_year)) > 2:
-                                continue
-                        except ValueError:
-                            pass # Skip if not valid integers
+
+                        if movie_year != parsed_year:
+                            continue
 
                     print("MATCHED MOVIE:", f["name"])
 
                     try:
-                        direct_url = get_seedr_download_url(f["id"])
+
+                        direct_url = get_seedr_download_url(
+                            f["id"]
+                        )
+
                         if not direct_url:
                             continue
 
-                        quality = detect_quality(f["name"])
+                        quality = detect_quality(
+                            f["name"]
+                        )
+
                         streams.append({
                             "name": "☁️ Seedr",
+
                             "title": (
                                 f"⚡ {quality}\n"
                                 f"📁 {f['name']}"
                             ),
+
                             "url": direct_url,
+
                             "behaviorHints": {
                                 "notWebReady": False
                             }
                         })
+
                     except Exception as e:
+
+                        print("STREAM ERROR:", e)
+
+            # Personal Catalog Matching
+            else:
+
+                for f in files:
+
+                    if not f.get("is_video"):
+                        continue
+
+                    if normalize(id) != normalize(f["name"]):
+                        continue
+
+                    try:
+
+                        direct_url = get_seedr_download_url(
+                            f["id"]
+                        )
+
+                        if not direct_url:
+                            continue
+
+                        quality = detect_quality(
+                            f["name"]
+                        )
+
+                        streams.append({
+                            "name": "☁️ Seedr",
+
+                            "title": (
+                                f"⚡ {quality}\n"
+                                f"📁 {f['name']}"
+                            ),
+
+                            "url": direct_url,
+
+                            "behaviorHints": {
+                                "notWebReady": False
+                            }
+                        })
+
+                    except Exception as e:
+
                         print("STREAM ERROR:", e)
 
     except Exception as e:

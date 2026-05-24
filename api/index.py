@@ -46,32 +46,23 @@ def normalize(text: str):
     return re.sub(r"\s+", " ", text).strip()
 
 
-ddef flexible_match(title: str, filename: str):
+def flexible_match(title: str, filename: str):
     title_n = normalize(title)
     file_n = normalize(filename)
-    
-    # 1. Simple direct substring match first
-    if title_n in file_n:
-        return True
-
     words = title_n.split()
+    
     if not words:
         return False
 
-    # 2. Drop common filler words for math calculations
-    core_words = [w for w in words if w not in ("the", "a", "an", "of", "and", "in", "part")]
-    if not core_words:
-        core_words = words
+    matched = sum(1 for w in words if w in file_n)
 
-    matched = sum(1 for w in core_words if w in file_n)
-
-    # 3. Lenient requirement: 1-2 word titles require 1 match. Longer require 50%.
-    if len(core_words) <= 2:
-        required = 1
+    if len(words) <= 2:
+        required = len(words)
     else:
-        required = max(2, len(core_words) // 2)
+        required = max(2, len(words) // 2)
 
     return matched >= required
+
 
 def get_meta(type_name: str, imdb_id: str):
 

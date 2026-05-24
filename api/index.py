@@ -49,17 +49,27 @@ def normalize(text: str):
 def flexible_match(title: str, filename: str):
     title_n = normalize(title)
     file_n = normalize(filename)
-    words = title_n.split()
     
+    # 1. Simple direct substring match first
+    if title_n in file_n:
+        return True
+
+    words = title_n.split()
     if not words:
         return False
 
-    matched = sum(1 for w in words if w in file_n)
+    # 2. Drop common filler words for math calculations
+    core_words = [w for w in words if w not in ("the", "a", "an", "of", "and", "in", "part")]
+    if not core_words:
+        core_words = words
 
-    if len(words) <= 2:
-        required = len(words)
+    matched = sum(1 for w in core_words if w in file_n)
+
+    # 3. Lenient requirement: 1-2 word titles require 1 match. Longer require 50%.
+    if len(core_words) <= 2:
+        required = 1
     else:
-        required = max(2, len(words) // 2)
+        required = max(2, len(core_words) // 2)
 
     return matched >= required
 
@@ -697,33 +707,50 @@ def stream(type: str, id: str):
 
         elif type == "movie":
 
-            # IMDb Matching
+    # IMDb Matching
             if id.startswith("tt"):
-                # ... (Keep your existing IMDb code here) ...
-                pass 
+                
+                # Safely fetch from Cinemeta
+                try:
+                    movie_title, movie_year = get_meta("movie", id)
+                except Exception as e:
+                    print(f"Cinemeta fetch failed for {id}:", e)
+                    continue
 
-            # Personal Catalog Matching
-            else:
-                # STRIP THE PREFIX FOR LOOKUP
-                clean_id = id.replace("seedr:", "") if id.startswith("seedr:") else id
+                print("MOVIE TITLE:", movie_title)
+                print("MOVIE YEAR:", movie_year)
 
                 for f in files:
-
                     if not f.get("is_video"):
                         continue
 
-                    # COMPARE WITH CLEAN ID
-                    if normalize(clean_id) != normalize(f["name"]):
+                    parsed_title, parsed_year = extract_title_year(f["name"])
+
+                    # Skip TV episodes
+                    season, episode = extract_season_episode(f["name"])
+                    if season is not None:
                         continue
+
+                    # Flexible title matching
+                    if not flexible_match(movie_title, parsed_title):
+                        continue
+
+                    # RELAXED YEAR MATCH (Allows +/- 2 years discrepancy)
+                    if movie_year and parsed_year:
+                        try:
+                            if abs(int(movie_year) - int(parsed_year)) > 2:
+                                continue
+                        except ValueError:
+                            pass # Skip if not valid integers
+
+                    print("MATCHED MOVIE:", f["name"])
 
                     try:
                         direct_url = get_seedr_download_url(f["id"])
-
                         if not direct_url:
                             continue
 
                         quality = detect_quality(f["name"])
-
                         streams.append({
                             "name": "☁️ Seedr",
                             "title": (
@@ -735,7 +762,6 @@ def stream(type: str, id: str):
                                 "notWebReady": False
                             }
                         })
-
                     except Exception as e:
                         print("STREAM ERROR:", e)
 

@@ -287,13 +287,10 @@ def manifest():
 
 @app.get("/catalog/movie/seedr.json")
 def movie_catalog():
-
     metas = []
-
     files = get_all_files()
 
     for f in files:
-
         if not f.get("is_video"):
             continue
 
@@ -303,15 +300,28 @@ def movie_catalog():
         if season is not None:
             continue
 
+        # Fetch the direct stream URL from Seedr
+        direct_url = get_seedr_download_url(f["id"])
+        
+        description = f["name"]
+        links = []
+
+        if direct_url:
+            description += f"\n\n🔗 Direct Stream: {direct_url}"
+            links.append({
+                "name": "Seedr Stream",
+                "category": "Watch",
+                "url": direct_url
+            })
+
         metas.append({
             "id": normalize(f["name"]),
             "type": "movie",
             "name": f["name"],
-
             "poster": f.get("thumb"),
             "posterShape": "poster",
-
-            "description": f["name"],
+            "description": description,
+            "links": links
         })
 
     return {"metas": metas}
@@ -323,15 +333,11 @@ def movie_catalog():
 
 @app.get("/catalog/series/seedr_series.json")
 def series_catalog():
-
     metas = []
-
     files = get_all_files()
-
     added = set()
 
     for f in files:
-
         if not f.get("is_video"):
             continue
 
@@ -342,23 +348,37 @@ def series_catalog():
             continue
 
         title, year = extract_title_year(f["name"])
-
         normalized = normalize(title)
 
+        # Since series are grouped by title on the Discover page, 
+        # we only fetch the direct URL for the first episode we find for this series.
         if normalized in added:
             continue
 
         added.add(normalized)
 
+        # Fetch the direct stream URL from Seedr for this specific episode
+        direct_url = get_seedr_download_url(f["id"])
+        
+        description = title
+        links = []
+
+        if direct_url:
+            description += f"\n\n🔗 Direct Stream (S{season:02d}E{episode:02d}): {direct_url}"
+            links.append({
+                "name": f"Play S{season:02d}E{episode:02d}",
+                "category": "Watch",
+                "url": direct_url
+            })
+
         metas.append({
             "id": f"seedrseries:{normalized}",
             "type": "series",
             "name": title,
-
             "poster": f.get("thumb"),
             "posterShape": "poster",
-
-            "description": title
+            "description": description,
+            "links": links
         })
 
     return {"metas": metas}

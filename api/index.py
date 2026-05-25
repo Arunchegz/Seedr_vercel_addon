@@ -295,12 +295,9 @@ def movie_catalog():
             continue
 
         season, episode = extract_season_episode(f["name"])
-
-        # Skip TV episodes
         if season is not None:
             continue
 
-        # Fetch the direct stream URL from Seedr
         direct_url = get_seedr_download_url(f["id"])
         
         description = f["name"]
@@ -315,7 +312,7 @@ def movie_catalog():
             })
 
         metas.append({
-            "id": normalize(f["name"]),
+            "id": f"seedr:{normalize(f['name'])}",  # <-- ADDED PREFIX HERE
             "type": "movie",
             "name": f["name"],
             "poster": f.get("thumb"),
@@ -325,7 +322,6 @@ def movie_catalog():
         })
 
     return {"metas": metas}
-
 
 # ---------------------------------------------------
 # SERIES CATALOG
@@ -525,31 +521,27 @@ def meta(type: str, id: str):
     # ---------------------------------------------------
     # MOVIE META
     # ---------------------------------------------------
-
     else:
+        # Strip the prefix so we can match it against the local file name
+        clean_id = id.replace("seedr:", "") 
 
         for f in files:
-
             if not f.get("is_video"):
                 continue
 
-            if normalize(id) == normalize(f["name"]):
-
+            if normalize(clean_id) == normalize(f["name"]):
                 return {
                     "meta": {
-                        "id": normalize(f["name"]),
+                        "id": f"seedr:{normalize(f['name'])}", # <-- KEEP PREFIX HERE
                         "type": "movie",
                         "name": f["name"],
-
                         "poster": f.get("thumb"),
                         "posterShape": "poster",
-
                         "description": f["name"]
                     }
                 }
 
     return {"meta": {}}
-
 
 # ---------------------------------------------------
 # Get Seedr direct URL
@@ -864,63 +856,39 @@ def stream(type: str, id: str):
             # -----------------------------------------
             # Personal catalog support
             # -----------------------------------------
-
             else:
+                # Strip the prefix to match the local file name
+                clean_id = id.replace("seedr:", "")
 
                 for f in files:
-
-                    if not f.get(
-                        "is_video"
-                    ):
+                    if not f.get("is_video"):
                         continue
 
-                    if normalize(id) != normalize(
-                        f["name"]
-                    ):
+                    if normalize(clean_id) != normalize(f["name"]):
                         continue
 
                     try:
-
-                        direct_url = (
-                            get_seedr_download_url(
-                                f["id"]
-                            )
-                        )
+                        direct_url = get_seedr_download_url(f["id"])
 
                         if not direct_url:
                             continue
 
-                        quality = (
-                            detect_quality(
-                                f["name"]
-                            )
-                        )
+                        quality = detect_quality(f["name"])
 
                         streams.append({
-
                             "name":"☁️ Seedr",
-
                             "title":(
                                 f"▶ Direct Play\n"
                                 f"⚡ {quality}\n"
                                 f"📁 {f['name']}"
                             ),
-
                             "url":direct_url,
-
                             "behaviorHints":{
                                 "notWebReady":False
                             }
-
                         })
-
                     except Exception as e:
-
-                        print(
-                            "STREAM ERROR:",
-                            e
-                        )
-
+                        print("STREAM ERROR:", e)
     except Exception as e:
 
         print(

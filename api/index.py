@@ -295,34 +295,61 @@ def movie_catalog():
             continue
 
         season, episode = extract_season_episode(f["name"])
+        
+        # Skip TV episodes
         if season is not None:
             continue
 
-        direct_url = get_seedr_download_url(f["id"])
-        
-        description = f["name"]
-        links = []
-
-        if direct_url:
-            description += f"\n\n🔗 Direct Stream: {direct_url}"
-            links.append({
-                "name": "Seedr Stream",
-                "category": "Watch",
-                "url": direct_url
-            })
-
         metas.append({
-            "id": f"seedr:{normalize(f['name'])}",  # <-- ADDED PREFIX HERE
+            "id": f"seedr:{normalize(f['name'])}",
             "type": "movie",
             "name": f["name"],
             "poster": f.get("thumb"),
             "posterShape": "poster",
-            "description": description,
-            "links": links
+            "description": f["name"]
         })
 
     return {"metas": metas}
 
+
+# ---------------------------------------------------
+# SERIES CATALOG
+# ---------------------------------------------------
+
+@app.get("/catalog/series/seedr_series.json")
+def series_catalog():
+    metas = []
+    files = get_all_files()
+    added = set()
+
+    for f in files:
+        if not f.get("is_video"):
+            continue
+
+        season, episode = extract_season_episode(f["name"])
+
+        # Only TV episodes
+        if season is None:
+            continue
+
+        title, year = extract_title_year(f["name"])
+        normalized = normalize(title)
+
+        if normalized in added:
+            continue
+
+        added.add(normalized)
+
+        metas.append({
+            "id": f"seedrseries:{normalized}",
+            "type": "series",
+            "name": title,
+            "poster": f.get("thumb"),
+            "posterShape": "poster",
+            "description": title
+        })
+
+    return {"metas": metas}
 # ---------------------------------------------------
 # SERIES CATALOG
 # ---------------------------------------------------
